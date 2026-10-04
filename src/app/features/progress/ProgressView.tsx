@@ -1,8 +1,13 @@
 import React from 'react';
-import { TrendingUp, Flame, Award, CheckCircle2, BookOpen, Clock, ShieldCheck, Star } from 'lucide-react';
+import { TrendingUp, Flame, Award, BookOpen, ShieldCheck, Star } from 'lucide-react';
 import { MODULES } from '@/data/modules';
+import { NavigationTab } from '@/types';
 
-export const ProgressView: React.FC = () => {
+interface ProgressViewProps {
+  onNavigate?: (tab: NavigationTab) => void;
+}
+
+export const ProgressView: React.FC<ProgressViewProps> = ({ onNavigate }) => {
   const completedModuleIds = ['module-01', 'module-02', 'module-03'];
   const total = MODULES.length;
   const completed = completedModuleIds.length;
@@ -41,6 +46,14 @@ export const ProgressView: React.FC = () => {
           <div className="mt-3 w-full h-2 rounded-full bg-bg-dark overflow-hidden">
             <div className="h-full bg-brand-primary rounded-full" style={{ width: `${percentage}%` }} />
           </div>
+          {onNavigate && (
+            <button
+              onClick={() => onNavigate('learn')}
+              className="mt-3 text-xs text-brand-primary hover:text-brand-accent font-semibold flex items-center gap-1 transition-colors"
+            >
+              <span>Continue Next Unit &rarr;</span>
+            </button>
+          )}
         </div>
 
         <div className="p-5 rounded-2xl bg-bg-surface border border-bg-border shadow-glass">
@@ -64,7 +77,16 @@ export const ProgressView: React.FC = () => {
             <span className="text-3xl font-extrabold text-brand-secondary">18</span>
             <span className="text-xs text-text-muted">operations</span>
           </div>
-          <p className="text-[11px] text-text-secondary mt-2">In safe browser sandbox</p>
+          {onNavigate ? (
+            <button
+              onClick={() => onNavigate('playground')}
+              className="mt-2 text-xs text-brand-secondary hover:text-emerald-300 font-semibold flex items-center gap-1 transition-colors"
+            >
+              <span>Open Sandbox Terminal &rarr;</span>
+            </button>
+          ) : (
+            <p className="text-[11px] text-text-secondary mt-2">In safe browser sandbox</p>
+          )}
         </div>
       </div>
 

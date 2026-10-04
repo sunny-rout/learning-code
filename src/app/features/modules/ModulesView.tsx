@@ -7,15 +7,50 @@ import {
   ArrowRight, 
   Search, 
   Sparkles,
-  FileText
+  FileText,
+  X
 } from 'lucide-react';
 import { MODULES } from '@/data/modules';
-import { ModuleItem } from '@/types';
+import { ModuleItem, NavigationTab } from '@/types';
 
-export const ModulesView: React.FC = () => {
+interface ModulesViewProps {
+  selectedModuleId?: string;
+  onSelectModuleId?: (id: string) => void;
+  onNavigate?: (tab: NavigationTab) => void;
+}
+
+export const ModulesView: React.FC<ModulesViewProps> = ({ 
+  selectedModuleId, 
+  onSelectModuleId,
+  onNavigate 
+}) => {
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [activeModule, setActiveModule] = useState<ModuleItem>(MODULES[0]);
+  const [activeModule, setActiveModule] = useState<ModuleItem>(() => {
+    if (selectedModuleId) {
+      const found = MODULES.find(m => m.id === selectedModuleId);
+      if (found) return found;
+    }
+    return MODULES[0];
+  });
+  const [isLessonOpen, setIsLessonOpen] = useState<boolean>(false);
+
+  // Sync external selectedModuleId
+  React.useEffect(() => {
+    if (selectedModuleId) {
+      const found = MODULES.find(m => m.id === selectedModuleId);
+      if (found) {
+        setActiveModule(found);
+      }
+    }
+  }, [selectedModuleId]);
+
+  const handleSelectModule = (module: ModuleItem) => {
+    setActiveModule(module);
+    if (onSelectModuleId) {
+      onSelectModuleId(module.id);
+    }
+  };
 
   const categories = ['All', 'Fundamentals', 'Daily Workflow', 'Branching & Merging', 'History & Recovery', 'Advanced'];
 
@@ -81,7 +116,7 @@ export const ModulesView: React.FC = () => {
             return (
               <div
                 key={module.id}
-                onClick={() => setActiveModule(module)}
+                onClick={() => handleSelectModule(module)}
                 className={`p-4 rounded-xl border transition-all cursor-pointer ${
                   isSelected
                     ? 'bg-bg-elevated border-brand-primary shadow-glow-primary'
@@ -193,13 +228,127 @@ export const ModulesView: React.FC = () => {
               </div>
             </div>
 
-            <button className="w-full py-2.5 rounded-xl bg-brand-primary hover:bg-brand-primary-hover text-white text-xs font-bold shadow-glow-primary transition-all flex items-center justify-center gap-2">
+            <button 
+              onClick={() => setIsLessonOpen(true)}
+              className="w-full py-2.5 rounded-xl bg-brand-primary hover:bg-brand-primary-hover text-white text-xs font-bold shadow-glow-primary transition-all flex items-center justify-center gap-2 active:scale-95"
+            >
               <span>Start Unit {activeModule.number}</span>
               <ArrowRight className="w-4 h-4" />
             </button>
           </div>
         </div>
       </div>
+
+      {/* Lesson Modal / Drawer */}
+      {isLessonOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-fadeIn">
+          <div className="w-full max-w-2xl bg-bg-surface border border-bg-border rounded-2xl p-6 shadow-2xl space-y-5 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-bg-border">
+              <div className="flex items-center gap-2.5">
+                <span className="font-mono text-xs font-bold px-2 py-0.5 rounded bg-brand-primary/20 text-brand-accent">
+                  UNIT {String(activeModule.number).padStart(2, '0')}
+                </span>
+                <span className="text-xs text-text-muted">PDF Source: Section {activeModule.pdfSection}</span>
+              </div>
+              <button
+                onClick={() => setIsLessonOpen(false)}
+                className="p-1 rounded-lg hover:bg-bg-elevated text-text-muted hover:text-white transition-colors"
+                aria-label="Close modal"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div>
+              <h2 className="text-xl font-bold text-white">{activeModule.title}</h2>
+              <p className="text-sm text-text-secondary mt-1.5 leading-relaxed">{activeModule.description}</p>
+            </div>
+
+            {/* 6-step curriculum roadmap inside unit */}
+            <div className="space-y-3">
+              <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wider">
+                Interactive Learning Breakdown
+              </h4>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                <div className="p-3 rounded-xl bg-bg-dark border border-indigo-500/20 space-y-1">
+                  <span className="font-bold text-indigo-300">1. Intuition & Real-World Analogy</span>
+                  <p className="text-text-muted text-[11px]">
+                    Mental models that make Git behavior instantly click for beginners.
+                  </p>
+                </div>
+                <div className="p-3 rounded-xl bg-bg-dark border border-sky-500/20 space-y-1">
+                  <span className="font-bold text-sky-300">2. 4-Stage State Diagram</span>
+                  <p className="text-text-muted text-[11px]">
+                    See how files transition between Working Dir, Staging, Local Repo & Remote.
+                  </p>
+                </div>
+                <div className="p-3 rounded-xl bg-bg-dark border border-emerald-500/20 space-y-1">
+                  <span className="font-bold text-emerald-300">3. Terminal Sandbox Practice</span>
+                  <p className="text-text-muted text-[11px]">
+                    Practice target commands with real-time feedback and state verification.
+                  </p>
+                </div>
+                <div className="p-3 rounded-xl bg-bg-dark border border-amber-500/20 space-y-1">
+                  <span className="font-bold text-amber-300">4. Knowledge Check Quiz</span>
+                  <p className="text-text-muted text-[11px]">
+                    Validate key syntax, flags, and common pitfalls before moving to next unit.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Target Commands */}
+            <div className="space-y-2">
+              <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wider">
+                Commands Covered
+              </h4>
+              <div className="flex flex-wrap gap-2">
+                {activeModule.commands.map((cmd, idx) => (
+                  <span key={idx} className="font-mono text-xs px-3 py-1.5 rounded-lg bg-bg-dark border border-bg-border text-brand-accent">
+                    $ {cmd}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            {/* Action buttons */}
+            <div className="pt-4 border-t border-bg-border flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                {onNavigate && (
+                  <button
+                    onClick={() => {
+                      setIsLessonOpen(false);
+                      onNavigate('playground');
+                    }}
+                    className="px-4 py-2 rounded-xl bg-bg-elevated hover:bg-bg-border text-white text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                  >
+                    <Terminal className="w-3.5 h-3.5 text-brand-secondary" />
+                    <span>Try in Sandbox</span>
+                  </button>
+                )}
+                {onNavigate && (
+                  <button
+                    onClick={() => {
+                      setIsLessonOpen(false);
+                      onNavigate('practice');
+                    }}
+                    className="px-4 py-2 rounded-xl bg-bg-elevated hover:bg-bg-border text-white text-xs font-semibold transition-colors"
+                  >
+                    <span>Practice Exercises</span>
+                  </button>
+                )}
+              </div>
+
+              <button
+                onClick={() => setIsLessonOpen(false)}
+                className="px-5 py-2 rounded-xl bg-brand-primary hover:bg-brand-primary-hover text-white text-xs font-bold transition-all"
+              >
+                Close Preview
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -4,12 +4,7 @@ import {
   Terminal, 
   ArrowRight, 
   GitCommit, 
-  GitBranch, 
-  GitPullRequest, 
-  BookOpen, 
-  Flame, 
   Award,
-  CheckCircle2,
   Sparkles
 } from 'lucide-react';
 import { MODULES } from '@/data/modules';
@@ -17,10 +12,19 @@ import { NavigationTab } from '@/types';
 
 interface DashboardViewProps {
   onNavigate: (tab: NavigationTab) => void;
+  onSelectModule?: (moduleId: string) => void;
 }
 
-export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
+export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate, onSelectModule }) => {
   const currentModule = MODULES[3]; // Staging and Committing (Module 4)
+
+  const handleModuleClick = (moduleId: string) => {
+    if (onSelectModule) {
+      onSelectModule(moduleId);
+    } else {
+      onNavigate('learn');
+    }
+  };
 
   return (
     <div className="space-y-8 animate-fadeIn">
@@ -94,7 +98,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
             </div>
 
             <button
-              onClick={() => onNavigate('learn')}
+              onClick={() => handleModuleClick(currentModule.id)}
               className="w-full py-2 px-3 rounded-lg bg-bg-elevated hover:bg-brand-primary/20 border border-brand-primary/30 text-brand-accent text-xs font-semibold flex items-center justify-center gap-2 transition-all"
             >
               <span>Resume Lesson</span>
@@ -209,7 +213,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
           {MODULES.slice(0, 6).map((module) => (
             <div
               key={module.id}
-              onClick={() => onNavigate('learn')}
+              onClick={() => handleModuleClick(module.id)}
               className="p-4 rounded-xl bg-bg-surface/70 border border-bg-border hover:border-brand-primary/40 transition-all cursor-pointer hover:bg-bg-elevated/40 flex flex-col justify-between"
             >
               <div>

@@ -1,5 +1,10 @@
 import React, { useState } from 'react';
-import { Target, CheckCircle2, Circle, ArrowRight, BookOpen, Terminal, Sparkles } from 'lucide-react';
+import { Target, CheckCircle2, Circle, ArrowRight, Terminal } from 'lucide-react';
+import { NavigationTab } from '@/types';
+
+interface PracticeViewProps {
+  onNavigate?: (tab: NavigationTab) => void;
+}
 
 interface Exercise {
   id: number;
@@ -12,7 +17,7 @@ interface Exercise {
   completed: boolean;
 }
 
-export const PracticeView: React.FC = () => {
+export const PracticeView: React.FC<PracticeViewProps> = ({ onNavigate }) => {
   const [exercises, setExercises] = useState<Exercise[]>([
     {
       id: 1,
@@ -182,13 +187,24 @@ export const PracticeView: React.FC = () => {
               <span className="text-[10px] uppercase font-semibold text-text-muted tracking-wider block mb-1.5">
                 Target Commands
               </span>
-              <div className="flex flex-wrap gap-1.5">
+              <div className="flex flex-wrap gap-1.5 mb-3">
                 {ex.recommendedCommands.map((cmd, idx) => (
                   <span key={idx} className="font-mono text-[10px] px-2 py-0.5 rounded bg-bg-dark border border-bg-border text-brand-accent">
                     {cmd}
                   </span>
                 ))}
               </div>
+
+              {onNavigate && (
+                <button
+                  onClick={() => onNavigate('playground')}
+                  className="w-full py-1.5 px-3 rounded-lg bg-bg-dark hover:bg-bg-elevated border border-bg-border text-text-secondary hover:text-white text-xs font-medium flex items-center justify-center gap-1.5 transition-colors"
+                >
+                  <Terminal className="w-3.5 h-3.5 text-brand-secondary" />
+                  <span>Try in Sandbox Terminal</span>
+                  <ArrowRight className="w-3 h-3 text-text-muted" />
+                </button>
+              )}
             </div>
           </div>
         ))}

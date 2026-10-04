@@ -1,7 +1,54 @@
-import React from 'react';
-import { Terminal, Layers, GitBranch, ArrowRight, Play, RefreshCw, Info } from 'lucide-react';
+import React, { useState } from 'react';
+import { Terminal, Layers, RefreshCw, Info } from 'lucide-react';
 
 export const PlaygroundView: React.FC = () => {
+  const [inputVal, setInputVal] = useState('');
+  const [terminalLines, setTerminalLines] = useState<string[]>([
+    '# Welcome to GitLearn Sandbox Terminal (Phase 1 Application Shell)',
+    '# Sourced from Git Operations & Commands Guide (W3Schools & git-scm.com)',
+    '# Try typing: git status, git init, git add ., or git log'
+  ]);
+
+  const handleReset = () => {
+    setTerminalLines([
+      '# Sandbox reset. Working tree refreshed.',
+      '# Try typing: git status, git init, git add ., or git log'
+    ]);
+    setInputVal('');
+  };
+
+  const handleCommandSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = inputVal.trim();
+    if (!trimmed) return;
+
+    const newLines = [...terminalLines, `$ ${trimmed}`];
+
+    if (trimmed === 'git status') {
+      newLines.push(
+        'On branch main',
+        'No commits yet',
+        'Untracked files: (use "git add <file>..." to include in what will be committed)',
+        '  README.md',
+        'nothing added to commit but untracked files present'
+      );
+    } else if (trimmed === 'git init') {
+      newLines.push('Initialized empty Git repository in /home/student/my-first-project/.git/');
+    } else if (trimmed === 'git add .' || trimmed === 'git add README.md') {
+      newLines.push('Changes to be committed: (use "git restore --staged <file>..." to unstage)', '  new file:   README.md');
+    } else if (trimmed.startsWith('git commit')) {
+      newLines.push('[main (root-commit) 4a8f92c] Initial commit', ' 1 file changed, 1 insertion(+)');
+    } else if (trimmed === 'clear') {
+      setTerminalLines([]);
+      setInputVal('');
+      return;
+    } else {
+      newLines.push(`[Phase 1 Shell] Command recognized: '${trimmed}'. Full in-memory engine arriving in Phase 2.`);
+    }
+
+    setTerminalLines(newLines);
+    setInputVal('');
+  };
   return (
     <div className="space-y-6 animate-fadeIn">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -16,7 +63,11 @@ export const PlaygroundView: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2">
-          <button className="px-3 py-1.5 rounded-lg bg-bg-surface border border-bg-border text-text-secondary hover:text-white text-xs font-medium flex items-center gap-1.5 transition-colors">
+          <button 
+            onClick={handleReset}
+            className="px-3 py-1.5 rounded-lg bg-bg-surface border border-bg-border text-text-secondary hover:text-white text-xs font-medium flex items-center gap-1.5 transition-colors active:scale-95"
+            aria-label="Reset Sandbox"
+          >
             <RefreshCw className="w-3.5 h-3.5" />
             <span>Reset Sandbox</span>
           </button>
@@ -138,35 +189,47 @@ export const PlaygroundView: React.FC = () => {
         </div>
 
         {/* Terminal Body */}
-        <div className="p-4 font-mono text-xs space-y-2 min-h-[220px]">
-          <div className="text-text-muted">
-            # Welcome to GitLearn Sandbox Terminal (Phase 1 Application Shell)
-            <br />
-            # Type commands like 'git status', 'git init', or 'git add .' to practice.
-          </div>
-          <div className="text-text-secondary flex items-center gap-2">
+        <div className="p-4 font-mono text-xs space-y-2 min-h-[260px] max-h-[400px] overflow-y-auto">
+          {terminalLines.map((line, idx) => {
+            if (line.startsWith('$ ')) {
+              return (
+                <div key={idx} className="text-text-secondary flex items-center gap-2 pt-1">
+                  <span className="text-emerald-400">student@laptop</span>
+                  <span className="text-text-muted">:</span>
+                  <span className="text-brand-accent">~/my-first-project</span>
+                  <span className="text-text-muted">(main)</span>
+                  <span className="text-text-primary">$</span>
+                  <span className="text-white font-semibold">{line.slice(2)}</span>
+                </div>
+              );
+            }
+            if (line.startsWith('#')) {
+              return <div key={idx} className="text-text-muted italic">{line}</div>;
+            }
+            return (
+              <div key={idx} className="text-slate-300 pl-4 border-l-2 border-brand-primary/40 leading-relaxed">
+                {line}
+              </div>
+            );
+          })}
+
+          {/* Interactive Command Input Form */}
+          <form onSubmit={handleCommandSubmit} className="flex items-center gap-2 pt-2">
             <span className="text-emerald-400">student@laptop</span>
             <span className="text-text-muted">:</span>
             <span className="text-brand-accent">~/my-first-project</span>
             <span className="text-text-muted">(main)</span>
             <span className="text-text-primary">$</span>
-            <span className="text-text-primary">git status</span>
-          </div>
-          <div className="text-slate-300 pl-4 border-l-2 border-brand-primary/40 space-y-1">
-            <p className="text-text-secondary">On branch main</p>
-            <p className="text-text-secondary">No commits yet</p>
-            <p className="text-amber-400 mt-1">Untracked files:</p>
-            <p className="text-amber-400/80 pl-4">README.md</p>
-            <p className="text-text-muted mt-1">(use &quot;git add &lt;file&gt;...&quot; to include in what will be committed)</p>
-          </div>
-          <div className="flex items-center gap-2 pt-2">
-            <span className="text-emerald-400">student@laptop</span>
-            <span className="text-text-muted">:</span>
-            <span className="text-brand-accent">~/my-first-project</span>
-            <span className="text-text-muted">(main)</span>
-            <span className="text-text-primary">$</span>
-            <span className="w-2 h-4 bg-brand-primary terminal-cursor inline-block ml-1" />
-          </div>
+            <input
+              type="text"
+              value={inputVal}
+              onChange={(e) => setInputVal(e.target.value)}
+              placeholder="type git command..."
+              className="flex-1 bg-transparent border-none text-text-primary font-mono text-xs focus:outline-none placeholder:text-text-muted/50"
+              autoFocus
+              aria-label="Terminal command input"
+            />
+          </form>
         </div>
       </div>
     </div>

@@ -22,9 +22,10 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTa
   const mobileNavItems: { id: NavigationTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
     { id: 'dashboard', label: 'Home', icon: LayoutDashboard },
     { id: 'learn', label: 'Learn', icon: BookOpen },
-    { id: 'playground', label: 'Playground', icon: Terminal },
+    { id: 'playground', label: 'Play', icon: Terminal },
     { id: 'practice', label: 'Practice', icon: Target },
     { id: 'quiz', label: 'Quiz', icon: HelpCircle },
+    { id: 'progress', label: 'Progress', icon: TrendingUp },
     { id: 'cheat-sheet', label: 'Cheats', icon: FileCode2 },
   ];
 

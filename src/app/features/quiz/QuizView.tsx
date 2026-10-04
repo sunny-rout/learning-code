@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { HelpCircle, CheckCircle2, XCircle, ArrowRight, RotateCcw, Award } from 'lucide-react';
+import { NavigationTab } from '@/types';
 
 interface QuizQuestion {
   id: number;
@@ -10,7 +11,11 @@ interface QuizQuestion {
   explanation: string;
 }
 
-export const QuizView: React.FC = () => {
+interface QuizViewProps {
+  onNavigate?: (tab: NavigationTab) => void;
+}
+
+export const QuizView: React.FC<QuizViewProps> = ({ onNavigate }) => {
   const questions: QuizQuestion[] = [
     {
       id: 1,
@@ -198,13 +203,25 @@ export const QuizView: React.FC = () => {
             </p>
           </div>
 
-          <button
-            onClick={handleRestart}
-            className="px-6 py-2.5 rounded-xl bg-bg-elevated hover:bg-bg-border border border-bg-border text-white text-xs font-bold inline-flex items-center gap-2 transition-all"
-          >
-            <RotateCcw className="w-4 h-4" />
-            <span>Retake Quiz</span>
-          </button>
+          <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+            <button
+              onClick={handleRestart}
+              className="px-5 py-2.5 rounded-xl bg-bg-elevated hover:bg-bg-border border border-bg-border text-white text-xs font-bold inline-flex items-center gap-2 transition-all"
+            >
+              <RotateCcw className="w-4 h-4" />
+              <span>Retake Quiz</span>
+            </button>
+
+            {onNavigate && (
+              <button
+                onClick={() => onNavigate('learn')}
+                className="px-5 py-2.5 rounded-xl bg-brand-primary hover:bg-brand-primary-hover text-white text-xs font-bold inline-flex items-center gap-2 shadow-glow-primary transition-all"
+              >
+                <span>Browse Lessons</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            )}
+          </div>
         </div>
       )}
     </div>

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { FileCode2, Search, AlertTriangle, ShieldCheck, Copy, Check } from 'lucide-react';
+import { FileCode2, Search, Copy, Check } from 'lucide-react';
 
 interface QuickCommand {
   task: string;
