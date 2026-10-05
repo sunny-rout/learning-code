@@ -6,6 +6,7 @@ interface GitConsoleProps {
   outputHistory: ConsoleOutputEntry[];
   commandHistory: string[];
   activeBranch: string | null;
+  isMerging?: boolean;
   onExecuteCommand: (cmd: string) => void;
   onClear: () => void;
 }
@@ -15,9 +16,12 @@ const COMMON_GIT_COMMANDS = [
   'git init',
   'git add .',
   'git add README.md',
+  'git restore README.md',
+  'git restore --staged feature.txt',
   'git rm ',
   'git rm --cached ',
   'git commit -m ""',
+  'git commit -am ""',
   'git log --oneline',
   'git diff',
   'git diff --staged',
@@ -25,6 +29,16 @@ const COMMON_GIT_COMMANDS = [
   'git switch main',
   'git switch -c feature/about',
   'git merge',
+  'git merge --abort',
+  'git stash',
+  'git stash pop',
+  'git stash list',
+  'git stash drop',
+  'git stash clear',
+  'git reset HEAD',
+  'git reset --hard HEAD',
+  'git reset --soft HEAD~1',
+  'git revert ',
   'git remote -v',
   'git push -u origin main',
   'touch README.md',
@@ -36,6 +50,7 @@ export const GitConsole: React.FC<GitConsoleProps> = ({
   outputHistory,
   commandHistory,
   activeBranch,
+  isMerging = false,
   onExecuteCommand,
   onClear: _onClear,
 }) => {
@@ -104,7 +119,8 @@ export const GitConsole: React.FC<GitConsoleProps> = ({
     }
   };
 
-  const branchDisplay = activeBranch ? activeBranch : 'HEAD detached';
+  const branchName = activeBranch ? activeBranch : 'HEAD detached';
+  const branchDisplay = isMerging ? `${branchName}|MERGING` : branchName;
 
   return (
     <div

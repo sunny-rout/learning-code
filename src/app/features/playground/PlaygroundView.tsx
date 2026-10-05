@@ -74,6 +74,7 @@ export const PlaygroundView: React.FC<PlaygroundViewProps> = ({
               <option value="3" className="bg-bg-dark text-white">Ex 3: Branching Without Fear</option>
               <option value="4" className="bg-bg-dark text-white">Ex 4: Merging Branches</option>
               <option value="5" className="bg-bg-dark text-white">Ex 5: Remote & Pushing</option>
+              <option value="6" className="bg-bg-dark text-white">Ex 6: Undo & Stash</option>
             </select>
           </div>
 
@@ -149,6 +150,7 @@ export const PlaygroundView: React.FC<PlaygroundViewProps> = ({
             outputHistory={outputHistory}
             commandHistory={commandHistory}
             activeBranch={repoState.activeBranch}
+            isMerging={Boolean(repoState.mergeState)}
             onExecuteCommand={runCommand}
             onClear={() => runCommand('clear')}
           />

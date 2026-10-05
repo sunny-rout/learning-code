@@ -112,9 +112,8 @@ export const PracticeView: React.FC<PracticeViewProps> = ({ onNavigate, onLaunch
         'Stage a file and unstage it using git restore --staged',
         'Temporarily save unfinished work with git stash and restore with git stash pop',
       ],
-      recommendedCommands: ['git restore <file>', 'git restore --staged <file>', 'git stash push', 'git stash pop'],
+      recommendedCommands: ['git restore <file>', 'git restore --staged <file>', 'git stash', 'git stash pop'],
       completed: false,
-      isPhase4: true,
     },
   ]);
 

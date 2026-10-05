@@ -188,5 +188,33 @@ console.log('--- Running Practice Scenario Validation Tests ---');
   console.log('✓ Scenario 6 Passed: Automated Reset & Re-entry Coverage Across Exercises 1–5');
 }
 
+// 7. Exercise 6: Undo and Stash Operations
+{
+  let state = PRACTICE_SCENARIOS[6].initialState;
+  assert(!PRACTICE_SCENARIOS[6].isCompleted(state), 'Ex 6 initially incomplete');
+
+  // Step 1: Discard unstaged changes to README.md
+  state = executeCommand(state, 'git restore README.md').nextState;
+  // Step 2: Unstage feature.txt
+  state = executeCommand(state, 'git restore --staged feature.txt').nextState;
+  // Step 3: Stash temporary work
+  state = executeCommand(state, 'git stash').nextState;
+  assert(state.stash.length === 1, 'Stash entry created');
+  assert(!PRACTICE_SCENARIOS[6].isCompleted(state), 'Ex 6 incomplete while stash not popped');
+
+  // Step 4: Reapply stashed work
+  state = executeCommand(state, 'git stash pop').nextState;
+  assert(state.stash.length === 0, 'Stash popped cleanly');
+  assert(PRACTICE_SCENARIOS[6].isCompleted(state), 'Ex 6 completed');
+
+  // Re-entry test: re-entering Ex 6 yields clean seed state with stash length 0
+  const reentered = createPracticeExerciseState(6);
+  assert(!PRACTICE_SCENARIOS[6].isCompleted(reentered), 'Ex 6 re-entry incomplete');
+  assert(reentered.stash.length === 0, 'Ex 6 re-entry stash clean');
+
+  console.log('✓ Scenario 7 Passed: Exercise 6 Undo and Stash Operations Goal & Re-entry Validation');
+}
+
 console.log('--- ALL PRACTICE SCENARIO VALIDATION TESTS PASSED! ---');
+
 

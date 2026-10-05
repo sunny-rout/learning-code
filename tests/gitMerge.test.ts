@@ -117,13 +117,17 @@ console.log('--- Running Git Merge & Ancestry Unit Tests ---');
 
   assert(conflictRes.exitCode === 1, 'Conflicting merge must exit with code 1');
   assert(conflictRes.stdout.some((l) => l.includes('CONFLICT (content)')), 'Output indicates conflict');
-  assert(conflictRes.stderr.some((l) => l.includes('Phase 4')), 'Notice indicates Phase 4 conflict resolution');
+  assert(conflictRes.nextState.mergeState !== null, 'Merge state is active');
+  assert(conflictRes.nextState.workingTree['file.txt'].includes('<<<<<<< HEAD'), 'Working tree has conflict markers');
 
-  // State must be completely uncorrupted
-  assert(conflictRes.nextState.headCommitId === preMergeState.headCommitId, 'HEAD unchanged');
-  assert(conflictRes.nextState.workingTree['file.txt'] === 'version from main\n', 'Working tree preserved');
+  // Verify git merge --abort cleanly restores pre-merge state
+  const abortRes = executeCommand(conflictRes.nextState, 'git merge --abort');
+  assert(abortRes.exitCode === 0, 'git merge --abort must succeed');
+  assert(abortRes.nextState.mergeState === null, 'Merge state cleared');
+  assert(abortRes.nextState.workingTree['file.txt'] === 'version from main\n', 'Working tree restored to pre-merge state');
+  assert(abortRes.nextState.headCommitId === preMergeState.headCommitId, 'HEAD unchanged');
 
-  console.log('✓ Test 3 Passed: Conflicting merge clean educational abort');
+  console.log('✓ Test 3 Passed: Conflicting merge enters conflict state and aborts cleanly');
 }
 
 // 4. Remote Push of Multi-Parent Merge Commit & Full Graph Integrity

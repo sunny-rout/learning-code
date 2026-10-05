@@ -1,7 +1,7 @@
 import React from 'react';
 import { GitRepoState } from '@/types/simulator';
 import { getStagedChanges, getUnstagedChanges, getUntrackedFiles } from '@/services/simulator/gitHelpers';
-import { HardDrive, Layers, GitCommit, Cloud, ArrowRight } from 'lucide-react';
+import { HardDrive, Layers, GitCommit, Cloud, ArrowRight, AlertTriangle, Archive } from 'lucide-react';
 
 interface PipelineStageViewProps {
   repoState: GitRepoState;
@@ -25,19 +25,59 @@ export const PipelineStageView: React.FC<PipelineStageViewProps> = ({ repoState 
   );
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-      {/* Stage 1: Working Directory */}
-      <div className="p-3.5 rounded-xl bg-bg-surface border border-bg-border/80 flex flex-col justify-between min-h-[140px] shadow-sm">
-        <div>
-          <div className="flex items-center justify-between mb-1.5">
-            <div className="flex items-center gap-1.5 text-xs font-bold text-amber-400">
-              <HardDrive className="w-3.5 h-3.5" />
-              <span>1. Working Tree</span>
+    <div className="space-y-3">
+      {repoState.mergeState && (
+        <div
+          role="alert"
+          aria-live="assertive"
+          className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 flex items-start gap-2.5 text-xs text-rose-200"
+        >
+          <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+          <div className="space-y-1">
+            <div className="font-bold flex items-center gap-2">
+              <span>Automatic merge failed; fix conflicts and commit the result.</span>
+              <span className="font-mono px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-300 text-[10px]">
+                {repoState.activeBranch} &lt;-- {repoState.mergeState.targetBranch}
+              </span>
             </div>
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-300 font-mono font-medium">
-              {untracked.length + unstaged.length} files
-            </span>
+            <div className="text-[11px] text-rose-300/80">
+              Conflicted files:{' '}
+              <span className="font-mono text-white font-semibold">
+                {repoState.mergeState.conflictingPaths.join(', ')}
+              </span>
+              . Resolve markers and run{' '}
+              <code className="bg-bg-dark px-1 py-0.5 rounded text-amber-300 font-mono">git add &lt;file&gt;</code>,
+              or abort using{' '}
+              <code className="bg-bg-dark px-1 py-0.5 rounded text-rose-300 font-mono">git merge --abort</code>.
+            </div>
           </div>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        {/* Stage 1: Working Directory */}
+        <div className="p-3.5 rounded-xl bg-bg-surface border border-bg-border/80 flex flex-col justify-between min-h-[140px] shadow-sm">
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="flex items-center gap-1.5 text-xs font-bold text-amber-400">
+                <HardDrive className="w-3.5 h-3.5" />
+                <span>1. Working Tree</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                {repoState.stash && repoState.stash.length > 0 && (
+                  <span
+                    title={`${repoState.stash.length} stash entries available (git stash pop)`}
+                    className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-300 border border-purple-500/30 font-mono font-medium flex items-center gap-1"
+                  >
+                    <Archive className="w-2.5 h-2.5" />
+                    <span>{repoState.stash.length} stash</span>
+                  </span>
+                )}
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-300 font-mono font-medium">
+                  {untracked.length + unstaged.length} files
+                </span>
+              </div>
+            </div>
 
           <div className="space-y-1 my-2 max-h-[60px] overflow-y-auto">
             {untracked.map((f) => (
@@ -166,5 +206,6 @@ export const PipelineStageView: React.FC<PipelineStageViewProps> = ({ repoState 
         </div>
       </div>
     </div>
-  );
+  </div>
+);
 };

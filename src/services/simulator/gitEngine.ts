@@ -3,6 +3,9 @@ import {
   CommandResult,
   GitCommitNode,
   GitRemoteRef,
+  GitStashEntry,
+  GitMergeConflictState,
+  PreMergeSnapshot,
 } from '@/types/simulator';
 import { parseCommandLine } from './commandParser';
 import {
@@ -267,7 +270,10 @@ function handleHelp(state: GitRepoState): CommandResult {
       '  git branch [<name>] [-d]    List, create, or delete branches',
       '  git switch [-c] <name>      Switch to a branch (or create & switch)',
       '  git checkout [-b] <name>    Switch branches (alias for switch)',
-      '  git merge <branch>          Merge target branch into active branch',
+      '  git merge [--abort] <branch> Merge branches or abort in-progress merge',
+      '  git stash [push|pop|list]   Temporarily shelve and restore working changes',
+      '  git reset [--hard|--soft]   Reset current HEAD to the specified state',
+      '  git revert <commit>         Create a new commit that reverts an earlier commit',
       '  git remote add <name> <url> Register a remote repository (e.g. origin)',
       '  git remote -v               List registered remote repositories',
       '  git push [-u] <rem> <br>    Push commits to simulated remote',
@@ -391,15 +397,30 @@ function handleGitCommand(
 
   // 10. git merge
   if (subcommand === 'merge') {
-    return handleGitMerge(state, args);
+    return handleGitMerge(state, flags, args);
   }
 
-  // 11. git remote
+  // 11. git stash
+  if (subcommand === 'stash') {
+    return handleGitStash(state, flags, args, headTree);
+  }
+
+  // 12. git reset
+  if (subcommand === 'reset') {
+    return handleGitReset(state, flags, args, headTree);
+  }
+
+  // 13. git revert
+  if (subcommand === 'revert') {
+    return handleGitRevert(state, flags, args, headTree);
+  }
+
+  // 14. git remote
   if (subcommand === 'remote') {
     return handleGitRemote(state, flags, args);
   }
 
-  // 12. git push
+  // 15. git push
   if (subcommand === 'push') {
     return handleGitPush(state, flags, args);
   }
@@ -451,6 +472,20 @@ function handleGitStatus(
 
   if (!state.headCommitId) {
     lines.push('No commits yet');
+  }
+
+  if (state.mergeState) {
+    lines.push('You have unmerged paths.');
+    lines.push('  (fix conflicts and run "git commit")');
+    lines.push('  (use "git merge --abort" to abort the merge)');
+    if (state.mergeState.conflictingPaths.length > 0) {
+      lines.push('');
+      lines.push('Unmerged paths:');
+      lines.push('  (use "git add <file>..." to mark resolution)');
+      state.mergeState.conflictingPaths.forEach((cp) => {
+        lines.push(`\tboth modified:   ${cp}`);
+      });
+    }
   }
 
   if (staged.length > 0) {
@@ -548,12 +583,48 @@ function handleGitAdd(
     }
   }
 
+  // If merge in progress: verify conflict markers are absent
+  let nextMergeState = state.mergeState;
+  const stdoutLines: string[] = [];
+
+  if (state.mergeState) {
+    const hasMarkers = (content: string) =>
+      content.includes('<<<<<<< HEAD') || content.includes('=======') || content.includes('>>>>>>>');
+
+    for (const f of stagedFiles) {
+      if (hasPath(state.workingTree, f) && hasMarkers(state.workingTree[f])) {
+        return {
+          nextState: state,
+          stdout: [],
+          stderr: [
+            `error: '${f}' still contains unresolved conflict markers.`,
+            'Please edit the file to resolve all conflicts before staging.',
+          ],
+          exitCode: 1,
+        };
+      }
+    }
+
+    const resolvedInThisStep = stagedFiles.filter((f) => state.mergeState!.conflictingPaths.includes(f));
+    if (resolvedInThisStep.length > 0) {
+      const nextConflicting = state.mergeState.conflictingPaths.filter((cp) => !stagedFiles.includes(cp));
+      const nextResolved = Array.from(new Set([...state.mergeState.resolvedPaths, ...resolvedInThisStep]));
+      nextMergeState = {
+        ...state.mergeState,
+        conflictingPaths: nextConflicting,
+        resolvedPaths: nextResolved,
+      };
+      resolvedInThisStep.forEach((f) => stdoutLines.push(`Resolved conflict in '${f}'`));
+    }
+  }
+
   return {
     nextState: {
       ...state,
       index: nextIndex,
+      mergeState: nextMergeState,
     },
-    stdout: [],
+    stdout: stdoutLines,
     stderr: [],
     exitCode: 0,
     explanation: {
@@ -724,8 +795,26 @@ function handleGitCommit(
   flags: Record<string, string | boolean>,
   headTree: Record<string, string>
 ): CommandResult {
-  const message = typeof flags['m'] === 'string' ? flags['m'] : null;
+  // Gating on in-progress merge conflicts
+  if (state.mergeState && state.mergeState.conflictingPaths.length > 0) {
+    return {
+      nextState: state,
+      stdout: [],
+      stderr: [
+        'fatal: You have not concluded your merge (MERGE_HEAD exists).',
+        'Please resolve all conflicts and stage them with `git add` before committing.',
+      ],
+      exitCode: 128,
+    };
+  }
+
+  const userMessage = typeof flags['m'] === 'string' ? flags['m'] : null;
   const isAll = Boolean(flags['a']);
+
+  const defaultMergeMsg = state.mergeState
+    ? `Merge branch '${state.mergeState.targetBranch}' into ${state.activeBranch || 'main'}`
+    : null;
+  const message = userMessage || defaultMergeMsg;
 
   if (!message) {
     return {
@@ -751,7 +840,7 @@ function handleGitCommit(
 
   // Check if staging area has any changes relative to HEAD
   const staged = getStagedChanges(headTree, effectiveIndex);
-  if (staged.length === 0) {
+  if (staged.length === 0 && !state.mergeState) {
     return {
       nextState: state,
       stdout: ['On branch ' + (state.activeBranch || 'main'), 'nothing to commit, working tree clean'],
@@ -761,7 +850,12 @@ function handleGitCommit(
   }
 
   const timestamp = Date.now();
-  const parentIds = state.headCommitId ? [state.headCommitId] : [];
+  const parentIds = state.mergeState
+    ? [state.mergeState.preMergeSnapshot.headCommitId || '', state.mergeState.targetCommitId].filter(Boolean)
+    : state.headCommitId
+    ? [state.headCommitId]
+    : [];
+
   const commitId = createDeterministicCommitId(parentIds, message, effectiveIndex, SIMULATOR_AUTHOR, timestamp);
 
   const newCommit: GitCommitNode = {
@@ -786,6 +880,7 @@ function handleGitCommit(
   const branchLabel = state.activeBranch ? state.activeBranch : 'HEAD detached at ' + commitId;
   const isRoot = parentIds.length === 0;
   const rootTag = isRoot ? ' (root-commit)' : '';
+  const wasMerging = Boolean(state.mergeState);
 
   return {
     nextState: {
@@ -794,6 +889,7 @@ function handleGitCommit(
       commits: nextCommits,
       branches: nextBranches,
       headCommitId: commitId,
+      mergeState: null,
     },
     stdout: [
       `[${branchLabel}${rootTag} ${commitId}] ${message}`,
@@ -802,8 +898,10 @@ function handleGitCommit(
     stderr: [],
     exitCode: 0,
     explanation: {
-      title: `Created Commit [${commitId}]`,
-      description: `Sealed staged files into immutable snapshot '${commitId}' on branch '${state.activeBranch}'.`,
+      title: wasMerging ? `Merged and Created Commit [${commitId}]` : `Created Commit [${commitId}]`,
+      description: wasMerging
+        ? `Resolved conflicts and sealed 2-parent merge snapshot '${commitId}' into branch '${state.activeBranch}'.`
+        : `Sealed staged files into immutable snapshot '${commitId}' on branch '${state.activeBranch}'.`,
       affectedStages: ['staging', 'local'],
     },
   };
@@ -1035,6 +1133,19 @@ function handleGitSwitch(
   args: string[],
   isCheckout: boolean
 ): CommandResult {
+  if (state.mergeState) {
+    return {
+      nextState: state,
+      stdout: [],
+      stderr: [
+        'fatal: you need to resolve your current index first',
+        'fatal: cannot switch branches while a merge is in progress.',
+        "Complete the merge with 'git commit' or abort it with 'git merge --abort'.",
+      ],
+      exitCode: 128,
+    };
+  }
+
   const createFlag = flags['c'] || flags['b'];
   const isCreate = Boolean(createFlag);
   let targetBranch = isCreate && typeof createFlag === 'string' ? createFlag : args[0];
@@ -1175,8 +1286,39 @@ function handleGitSwitch(
 
 function handleGitMerge(
   state: GitRepoState,
+  flags: Record<string, string | boolean>,
   args: string[]
 ): CommandResult {
+  // 1. git merge --abort
+  if (flags['abort'] || args.includes('--abort')) {
+    if (!state.mergeState) {
+      return {
+        nextState: state,
+        stdout: [],
+        stderr: ['fatal: There is no merge to abort (MERGE_HEAD missing).'],
+        exitCode: 128,
+      };
+    }
+    return {
+      nextState: {
+        ...state,
+        workingTree: { ...state.mergeState.preMergeSnapshot.workingTree },
+        index: { ...state.mergeState.preMergeSnapshot.index },
+        headCommitId: state.mergeState.preMergeSnapshot.headCommitId,
+        activeBranch: state.mergeState.preMergeSnapshot.activeBranch,
+        mergeState: null,
+      },
+      stdout: ['Merge aborted. Repository restored to pre-merge state.'],
+      stderr: [],
+      exitCode: 0,
+      explanation: {
+        title: 'Merge Aborted',
+        description: 'Cancelled in-progress merge and restored working tree and index to pre-merge state.',
+        affectedStages: ['working', 'staging'],
+      },
+    };
+  }
+
   if (args.length === 0) {
     return {
       nextState: state,
@@ -1202,6 +1344,25 @@ function handleGitMerge(
       stdout: ['Already up to date.'],
       stderr: [],
       exitCode: 0,
+    };
+  }
+
+  const headCommit = state.headCommitId ? state.commits[state.headCommitId] : null;
+  const headTree = headCommit ? headCommit.tree : {};
+
+  // PRE-MERGE CLEAN CHECK
+  const dirtyCheck = evaluateDirtyTree(state.workingTree, state.index, headTree);
+  if (dirtyCheck.isDirty) {
+    return {
+      nextState: state,
+      stdout: [],
+      stderr: [
+        'error: Your local changes to the following files would be overwritten by merge:',
+        ...dirtyCheck.dirtyPaths.map((p) => `\t${p}`),
+        'Please commit your changes or stash them before you merge.',
+        'Aborting',
+      ],
+      exitCode: 1,
     };
   }
 
@@ -1321,14 +1482,56 @@ function handleGitMerge(
   }
 
   if (conflicts.length > 0) {
+    const preMergeSnapshot: PreMergeSnapshot = {
+      workingTree: { ...state.workingTree },
+      index: { ...state.index },
+      headCommitId: state.headCommitId,
+      activeBranch: state.activeBranch,
+    };
+
+    const nextWorkingTree = { ...state.workingTree };
+    const nextIndex = { ...state.index };
+
+    // Apply non-conflicting files
+    for (const [p, content] of Object.entries(mergedTree)) {
+      nextWorkingTree[p] = content;
+      nextIndex[p] = content;
+    }
+
+    // Populate conflicting files with standard Git conflict markers
+    for (const c of conflicts) {
+      const currentVal = (currentTree[c] ?? '').trimEnd();
+      const targetVal = (targetTree[c] ?? '').trimEnd();
+      nextWorkingTree[c] = `<<<<<<< HEAD\n${currentVal}\n=======\n${targetVal}\n>>>>>>> ${targetBranch}\n`;
+    }
+
+    const nextMergeState: GitMergeConflictState = {
+      targetBranch,
+      targetCommitId,
+      baseCommitId: mergeBaseId || '',
+      conflictingPaths: conflicts,
+      resolvedPaths: [],
+      preMergeSnapshot,
+    };
+
     return {
-      nextState: state,
+      nextState: {
+        ...state,
+        workingTree: nextWorkingTree,
+        index: nextIndex,
+        mergeState: nextMergeState,
+      },
       stdout: conflicts.map((c) => `Auto-merging ${c}\nCONFLICT (content): Merge conflict in ${c}`),
       stderr: [
-        '[Educational Sandbox Notice] Interactive 3-way merge conflict editing is scheduled for Phase 4.',
-        'To preserve repository state, this merge has been aborted.',
+        'Automatic merge failed; fix conflicts and then commit the result.',
+        "Use 'git status' to see conflicted paths, or 'git merge --abort' to cancel.",
       ],
       exitCode: 1,
+      explanation: {
+        title: 'Merge Conflict Detected',
+        description: `Automatic merge encountered conflicts in ${conflicts.join(', ')}. Conflict markers have been placed in the working tree.`,
+        affectedStages: ['working', 'staging'],
+      },
     };
   }
 
@@ -1374,6 +1577,571 @@ function handleGitMerge(
     explanation: {
       title: `3-Way Merge Commit Created [${mergeCommitId.slice(0, 7)}]`,
       description: `Combined diverged work from '${targetBranch}' into '${state.activeBranch}'. Generated merge snapshot with two parent links.`,
+      affectedStages: ['working', 'staging', 'local'],
+    },
+  };
+}
+
+function handleGitStash(
+  state: GitRepoState,
+  flags: Record<string, string | boolean>,
+  args: string[],
+  headTree: Record<string, string>
+): CommandResult {
+  const action = args[0] || 'push';
+
+  // 1. git stash list
+  if (action === 'list') {
+    if (state.stash.length === 0) {
+      return {
+        nextState: state,
+        stdout: [],
+        stderr: [],
+        exitCode: 0,
+      };
+    }
+    const lines = state.stash.map((s, idx) => `stash@{${idx}}: ${s.message}`);
+    return {
+      nextState: state,
+      stdout: lines,
+      stderr: [],
+      exitCode: 0,
+    };
+  }
+
+  // 2. git stash clear
+  if (action === 'clear') {
+    return {
+      nextState: {
+        ...state,
+        stash: [],
+      },
+      stdout: [],
+      stderr: [],
+      exitCode: 0,
+      explanation: {
+        title: 'Cleared Stash Stack',
+        description: 'Removed all stashed entries from the stash stack.',
+        affectedStages: ['working'],
+      },
+    };
+  }
+
+  // 3. git stash drop
+  if (action === 'drop') {
+    if (state.stash.length === 0) {
+      return {
+        nextState: state,
+        stdout: [],
+        stderr: ['error: No stash entries found.'],
+        exitCode: 1,
+      };
+    }
+    const targetSpec = args[1] || 'stash@{0}';
+    const match = targetSpec.match(/stash@\{(\d+)\}/);
+    const dropIndex = match ? parseInt(match[1], 10) : 0;
+    if (dropIndex < 0 || dropIndex >= state.stash.length) {
+      return {
+        nextState: state,
+        stdout: [],
+        stderr: [`error: '${targetSpec}' is not a valid stash reference`],
+        exitCode: 1,
+      };
+    }
+
+    const nextStash = state.stash.filter((_, idx) => idx !== dropIndex).map((entry, idx) => ({
+      ...entry,
+      id: `stash@{${idx}}`,
+    }));
+
+    return {
+      nextState: {
+        ...state,
+        stash: nextStash,
+      },
+      stdout: [`Dropped refs/stash@{${dropIndex}} (${state.stash[dropIndex].id})`],
+      stderr: [],
+      exitCode: 0,
+      explanation: {
+        title: `Dropped Stash Entry stash@{${dropIndex}}`,
+        description: 'Removed stash entry from stack.',
+        affectedStages: ['working'],
+      },
+    };
+  }
+
+  // 4. git stash pop
+  if (action === 'pop') {
+    if (state.stash.length === 0) {
+      return {
+        nextState: state,
+        stdout: [],
+        stderr: ['error: No stash entries found.'],
+        exitCode: 1,
+      };
+    }
+
+    const topEntry = state.stash[0];
+
+    // Check A: Conservative Dirty-Tree Guard
+    const dirtyCheck = evaluateDirtyTree(state.workingTree, state.index, headTree);
+    if (dirtyCheck.isDirty) {
+      return {
+        nextState: state,
+        stdout: [],
+        stderr: [
+          'error: Your local changes to the following files would be overwritten by merge:',
+          ...dirtyCheck.dirtyPaths.map((p) => `\t${p}`),
+          'Please commit your changes or stash them before you pop.',
+        ],
+        exitCode: 1,
+      };
+    }
+
+    // Check B: Explicit Untracked-File Collision Guard
+    const restorePaths = Array.from(
+      new Set([...Object.keys(topEntry.workingSnapshot), ...Object.keys(topEntry.stagedSnapshot)])
+    );
+    const untrackedPaths = getUntrackedFiles(state.workingTree, state.index, headTree);
+    const collisions = restorePaths.filter((p) => untrackedPaths.includes(p));
+
+    if (collisions.length > 0) {
+      return {
+        nextState: state,
+        stdout: [],
+        stderr: [
+          'error: The following untracked working tree files would be overwritten by merge:',
+          ...collisions.map((p) => `\t${p}`),
+          'Please move or remove them before you pop your stash.',
+          'Aborting',
+        ],
+        exitCode: 1,
+      };
+    }
+
+    // Clean restore: preserve unrelated untracked files
+    const nextWorkingTree: Record<string, string> = {};
+    for (const u of untrackedPaths) {
+      nextWorkingTree[u] = state.workingTree[u];
+    }
+    // Restore tracked working files
+    for (const [p, content] of Object.entries(topEntry.workingSnapshot)) {
+      nextWorkingTree[p] = content;
+    }
+    // Restore staged index files
+    const nextIndex: Record<string, string> = { ...topEntry.stagedSnapshot };
+
+    const nextStash = state.stash.slice(1).map((entry, idx) => ({
+      ...entry,
+      id: `stash@{${idx}}`,
+    }));
+
+    return {
+      nextState: {
+        ...state,
+        workingTree: nextWorkingTree,
+        index: nextIndex,
+        stash: nextStash,
+      },
+      stdout: [
+        `On branch ${state.activeBranch || 'main'}`,
+        'Changes to be committed / not staged restored from stash.',
+        `Dropped refs/stash@{0} (${topEntry.id})`,
+      ],
+      stderr: [],
+      exitCode: 0,
+      explanation: {
+        title: 'Popped Stash into Working Directory',
+        description: 'Restored staged and unstaged work in progress from stash@{0} and removed it from stash stack.',
+        affectedStages: ['working', 'staging'],
+      },
+    };
+  }
+
+  // 5. git stash [push] [-m "<msg>"]
+  const staged = getStagedChanges(headTree, state.index);
+  const unstaged = getUnstagedChanges(state.index, state.workingTree);
+
+  if (staged.length === 0 && unstaged.length === 0) {
+    return {
+      nextState: state,
+      stdout: ['No local changes to save'],
+      stderr: [],
+      exitCode: 0,
+    };
+  }
+
+  const customMessage =
+    typeof flags['m'] === 'string'
+      ? flags['m']
+      : action !== 'push' && action !== 'stash'
+      ? action
+      : null;
+  const headShort = state.headCommitId ? state.headCommitId.slice(0, 7) : '0000000';
+  const headMsg =
+    state.headCommitId && state.commits[state.headCommitId]
+      ? state.commits[state.headCommitId].message
+      : 'initial';
+  const branchName = state.activeBranch || 'HEAD';
+  const defaultMessage = `WIP on ${branchName}: ${headShort} ${headMsg}`;
+  const stashMessage = customMessage || defaultMessage;
+
+  // Tracked working tree snapshot (only files tracked in index or HEAD)
+  const workingSnapshot: Record<string, string> = {};
+  for (const p of Object.keys(state.workingTree)) {
+    if (hasPath(state.index, p) || hasPath(headTree, p)) {
+      workingSnapshot[p] = state.workingTree[p];
+    }
+  }
+
+  const stagedSnapshot: Record<string, string> = { ...state.index };
+
+  const newEntry: GitStashEntry = {
+    id: `stash@{0}`,
+    message: stashMessage,
+    timestamp: Date.now(),
+    branch: branchName,
+    baseCommitId: state.headCommitId,
+    stagedSnapshot,
+    workingSnapshot,
+  };
+
+  const nextStash = [
+    newEntry,
+    ...state.stash.map((s, idx) => ({ ...s, id: `stash@{${idx + 1}}` })),
+  ];
+
+  // Revert tracked files in workingTree and index to HEAD.tree, preserving untracked files
+  const untracked = getUntrackedFiles(state.workingTree, state.index, headTree);
+  const nextWorkingTree: Record<string, string> = { ...headTree };
+  for (const u of untracked) {
+    nextWorkingTree[u] = state.workingTree[u];
+  }
+  const nextIndex: Record<string, string> = { ...headTree };
+
+  return {
+    nextState: {
+      ...state,
+      workingTree: nextWorkingTree,
+      index: nextIndex,
+      stash: nextStash,
+    },
+    stdout: [`Saved working directory and index state ${stashMessage}`],
+    stderr: [],
+    exitCode: 0,
+    explanation: {
+      title: 'Stashed Working Directory Changes',
+      description: `Saved tracked edits to stash@{0} ('${stashMessage}'). Reverted working directory to clean HEAD snapshot.`,
+      affectedStages: ['working', 'staging'],
+    },
+  };
+}
+
+function handleGitReset(
+  state: GitRepoState,
+  flags: Record<string, string | boolean>,
+  args: string[],
+  headTree: Record<string, string>
+): CommandResult {
+  const isSoft = Boolean(flags['soft']);
+  const isHard = Boolean(flags['hard']);
+  const isMixed = Boolean(flags['mixed']) || (!isSoft && !isHard);
+
+  // Target commit spec: first non-flag arg, default to 'HEAD'
+  const targetSpec = args[0] || 'HEAD';
+
+  let targetCommitId: string | null = null;
+
+  if (targetSpec === 'HEAD') {
+    targetCommitId = state.headCommitId;
+  } else if (targetSpec.startsWith('HEAD~') || targetSpec.startsWith('HEAD^')) {
+    let count = 1;
+    if (targetSpec.startsWith('HEAD~')) {
+      const numStr = targetSpec.slice(5);
+      count = numStr ? parseInt(numStr, 10) : 1;
+    }
+    let curr: string | null = state.headCommitId;
+    for (let i = 0; i < count; i++) {
+      if (!curr || !state.commits[curr] || state.commits[curr].parentIds.length === 0) {
+        return {
+          nextState: state,
+          stdout: [],
+          stderr: [`fatal: ambiguous argument '${targetSpec}': unknown revision or path not in the working tree.`],
+          exitCode: 128,
+        };
+      }
+      curr = state.commits[curr].parentIds[0];
+    }
+    targetCommitId = curr;
+  } else {
+    // Hash or branch name
+    if (state.branches[targetSpec]) {
+      targetCommitId = state.branches[targetSpec].commitId;
+    } else {
+      const match = Object.keys(state.commits).find((id) => id.startsWith(targetSpec));
+      if (!match) {
+        return {
+          nextState: state,
+          stdout: [],
+          stderr: [`fatal: ambiguous argument '${targetSpec}': unknown revision or path not in the working tree.`],
+          exitCode: 128,
+        };
+      }
+      targetCommitId = match;
+    }
+  }
+
+  const targetCommit = targetCommitId ? state.commits[targetCommitId] : null;
+  const targetTree = targetCommit ? targetCommit.tree : {};
+
+  // 1. git reset HEAD (mixed reset without moving commit pointer)
+  if (targetSpec === 'HEAD' && isMixed) {
+    return {
+      nextState: {
+        ...state,
+        index: { ...headTree },
+      },
+      stdout: ['Unstaged changes after reset:'],
+      stderr: [],
+      exitCode: 0,
+      explanation: {
+        title: 'Reset Staging Index to HEAD',
+        description: 'Unstaged all staged changes. Working directory files remain untouched.',
+        affectedStages: ['staging'],
+      },
+    };
+  }
+
+  // 2. git reset --hard
+  if (isHard) {
+    const untracked = getUntrackedFiles(state.workingTree, state.index, headTree);
+    const collisions = untracked.filter((u) => hasPath(targetTree, u) && targetTree[u] !== state.workingTree[u]);
+
+    if (collisions.length > 0) {
+      return {
+        nextState: state,
+        stdout: [],
+        stderr: [
+          'fatal: The following untracked working tree files would be overwritten by reset:',
+          ...collisions.map((c) => `\t${c}`),
+          'Please move or remove them before you reset.',
+          'Aborting',
+        ],
+        exitCode: 128,
+      };
+    }
+
+    const nextWorkingTree: Record<string, string> = { ...targetTree };
+    for (const u of untracked) {
+      nextWorkingTree[u] = state.workingTree[u];
+    }
+
+    const nextBranches = { ...state.branches };
+    if (state.activeBranch) {
+      nextBranches[state.activeBranch] = {
+        ...nextBranches[state.activeBranch],
+        commitId: targetCommitId || '',
+      };
+    }
+
+    return {
+      nextState: {
+        ...state,
+        branches: nextBranches,
+        headCommitId: targetCommitId,
+        index: { ...targetTree },
+        workingTree: nextWorkingTree,
+      },
+      stdout: [`HEAD is now at ${targetCommitId?.slice(0, 7) || '0000000'} ${targetCommit?.message || ''}`],
+      stderr: [],
+      exitCode: 0,
+      explanation: {
+        title: 'Hard Reset Completed',
+        description: `Moved HEAD to ${targetCommitId?.slice(0, 7)}, reset index, and discarded working directory changes.`,
+        affectedStages: ['working', 'staging', 'local'],
+      },
+    };
+  }
+
+  // 3. git reset --soft
+  if (isSoft) {
+    const nextBranches = { ...state.branches };
+    if (state.activeBranch) {
+      nextBranches[state.activeBranch] = {
+        ...nextBranches[state.activeBranch],
+        commitId: targetCommitId || '',
+      };
+    }
+    return {
+      nextState: {
+        ...state,
+        branches: nextBranches,
+        headCommitId: targetCommitId,
+      },
+      stdout: [],
+      stderr: [],
+      exitCode: 0,
+      explanation: {
+        title: 'Soft Reset Completed',
+        description: `Moved HEAD to ${targetCommitId?.slice(0, 7)}. Staging index and working directory were preserved.`,
+        affectedStages: ['local'],
+      },
+    };
+  }
+
+  // 4. git reset --mixed <commit>
+  const nextBranches = { ...state.branches };
+  if (state.activeBranch) {
+    nextBranches[state.activeBranch] = {
+      ...nextBranches[state.activeBranch],
+      commitId: targetCommitId || '',
+    };
+  }
+  return {
+    nextState: {
+      ...state,
+      branches: nextBranches,
+      headCommitId: targetCommitId,
+      index: { ...targetTree },
+    },
+    stdout: [
+      `Unstaged changes after reset:`,
+      `HEAD is now at ${targetCommitId?.slice(0, 7) || '0000000'} ${targetCommit?.message || ''}`,
+    ],
+    stderr: [],
+    exitCode: 0,
+    explanation: {
+      title: 'Mixed Reset Completed',
+      description: `Moved HEAD to ${targetCommitId?.slice(0, 7)} and reset index to match. Working directory edits preserved.`,
+      affectedStages: ['staging', 'local'],
+    },
+  };
+}
+
+function handleGitRevert(
+  state: GitRepoState,
+  _flags: Record<string, string | boolean>,
+  args: string[],
+  headTree: Record<string, string>
+): CommandResult {
+  if (args.length === 0) {
+    return {
+      nextState: state,
+      stdout: [],
+      stderr: ['fatal: you must specify a commit to revert'],
+      exitCode: 128,
+    };
+  }
+
+  const targetSpec = args[0];
+  const targetId = Object.keys(state.commits).find((id) => id === targetSpec || id.startsWith(targetSpec));
+  if (!targetId || !state.commits[targetId]) {
+    return {
+      nextState: state,
+      stdout: [],
+      stderr: [`fatal: bad revision '${targetSpec}'`],
+      exitCode: 128,
+    };
+  }
+
+  const targetCommit = state.commits[targetId];
+
+  // Disallow merge commits
+  if (targetCommit.parentIds.length > 1) {
+    return {
+      nextState: state,
+      stdout: [],
+      stderr: [
+        `error: commit ${targetId} is a merge but no -m option was given.`,
+        'fatal: revert failed',
+      ],
+      exitCode: 1,
+    };
+  }
+
+  // Disallow root commits without parent
+  if (targetCommit.parentIds.length === 0) {
+    return {
+      nextState: state,
+      stdout: [],
+      stderr: ['error: cannot revert root commit without parent', 'fatal: revert failed'],
+      exitCode: 1,
+    };
+  }
+
+  // Dirty check
+  const dirtyCheck = evaluateDirtyTree(state.workingTree, state.index, headTree);
+  if (dirtyCheck.isDirty) {
+    return {
+      nextState: state,
+      stdout: [],
+      stderr: [
+        'error: your local changes would be overwritten by revert.',
+        'hint: commit your changes or stash them to proceed.',
+        'fatal: revert failed',
+      ],
+      exitCode: 1,
+    };
+  }
+
+  const parentId = targetCommit.parentIds[0];
+  const parentTree = state.commits[parentId].tree;
+
+  const nextWorkingTree = { ...state.workingTree };
+  const allAffected = new Set([...Object.keys(targetCommit.tree), ...Object.keys(parentTree)]);
+
+  for (const p of allAffected) {
+    const parentVal = parentTree[p];
+    const targetVal = targetCommit.tree[p];
+
+    if (parentVal !== targetVal) {
+      if (parentVal === undefined) {
+        delete nextWorkingTree[p];
+      } else {
+        nextWorkingTree[p] = parentVal;
+      }
+    }
+  }
+
+  const nextIndex = { ...nextWorkingTree };
+  const timestamp = Date.now();
+  const parentIds = state.headCommitId ? [state.headCommitId] : [];
+  const revertMessage = `Revert "${targetCommit.message}"`;
+  const revertCommitId = createDeterministicCommitId(parentIds, revertMessage, nextIndex, SIMULATOR_AUTHOR, timestamp);
+
+  const newCommit: GitCommitNode = {
+    id: revertCommitId,
+    parentIds,
+    message: revertMessage,
+    author: SIMULATOR_AUTHOR,
+    timestamp,
+    tree: { ...nextIndex },
+  };
+
+  const nextCommits = { ...state.commits, [revertCommitId]: newCommit };
+  const nextBranches = { ...state.branches };
+  if (state.activeBranch) {
+    nextBranches[state.activeBranch] = {
+      ...nextBranches[state.activeBranch],
+      commitId: revertCommitId,
+    };
+  }
+
+  return {
+    nextState: {
+      ...state,
+      commits: nextCommits,
+      branches: nextBranches,
+      headCommitId: revertCommitId,
+      index: nextIndex,
+      workingTree: nextWorkingTree,
+    },
+    stdout: [`[${state.activeBranch} ${revertCommitId}] ${revertMessage}`],
+    stderr: [],
+    exitCode: 0,
+    explanation: {
+      title: `Created Revert Commit [${revertCommitId}]`,
+      description: `Inverted changes from commit ${targetId.slice(0, 7)} and recorded as a new forward commit snapshot.`,
       affectedStages: ['working', 'staging', 'local'],
     },
   };

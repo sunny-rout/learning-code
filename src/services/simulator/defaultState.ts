@@ -16,6 +16,8 @@ export function createPristineRepoState(): GitRepoState {
     activeBranch: null,
     headCommitId: null,
     remotes: {},
+    stash: [],
+    mergeState: null,
   };
 }
 
@@ -38,6 +40,8 @@ export function createPracticeExerciseState(exerciseId: number): GitRepoState {
         activeBranch: null,
         headCommitId: null,
         remotes: {},
+        stash: [],
+        mergeState: null,
       };
 
     case 2:
@@ -55,6 +59,8 @@ export function createPracticeExerciseState(exerciseId: number): GitRepoState {
         activeBranch: 'main',
         headCommitId: null,
         remotes: {},
+        stash: [],
+        mergeState: null,
       };
 
     case 3: {
@@ -81,6 +87,8 @@ export function createPracticeExerciseState(exerciseId: number): GitRepoState {
         activeBranch: 'main',
         headCommitId: c1Id,
         remotes: {},
+        stash: [],
+        mergeState: null,
       };
     }
 
@@ -139,6 +147,8 @@ export function createPracticeExerciseState(exerciseId: number): GitRepoState {
         activeBranch: 'main',
         headCommitId: c3Id,
         remotes: {},
+        stash: [],
+        mergeState: null,
       };
     }
 
@@ -166,6 +176,47 @@ export function createPracticeExerciseState(exerciseId: number): GitRepoState {
         activeBranch: 'main',
         headCommitId: c1Id,
         remotes: {},
+        stash: [],
+        mergeState: null,
+      };
+    }
+
+    case 6: {
+      // Exercise 6: Undo and Stash Operations
+      // Starting state: 1 commit on main, 1 unstaged edit on README.md, 1 staged edit on feature.txt
+      const c1Tree = {
+        'README.md': '# My Practice Project\nStable production content.\n',
+        'feature.txt': 'Feature base content.\n',
+      };
+      const c1Id = createDeterministicCommitId([], 'Initial stable commit', c1Tree, author, timestamp);
+      const c1: GitCommitNode = {
+        id: c1Id,
+        parentIds: [],
+        message: 'Initial stable commit',
+        author,
+        timestamp,
+        tree: c1Tree,
+      };
+
+      return {
+        isInitialized: true,
+        workingTree: {
+          'README.md': '# My Practice Project\nAccidental unwanted typo here!\n',
+          'feature.txt': 'Temporary feature notes to unstage.\n',
+        },
+        index: {
+          'README.md': '# My Practice Project\nStable production content.\n',
+          'feature.txt': 'Temporary feature notes to unstage.\n',
+        },
+        commits: { [c1Id]: c1 },
+        branches: {
+          main: { name: 'main', commitId: c1Id },
+        },
+        activeBranch: 'main',
+        headCommitId: c1Id,
+        remotes: {},
+        stash: [],
+        mergeState: null,
       };
     }
 

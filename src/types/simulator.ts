@@ -27,6 +27,32 @@ export interface GitRemoteRef {
   branches: Record<string, string>;       // branch name -> commitId
 }
 
+export interface GitStashEntry {
+  id: string;                      // "stash@{0}", "stash@{1}", ...
+  message: string;                 // e.g. "WIP on main: 14c7b7e initial commit"
+  timestamp: number;
+  branch: string;                  // Branch name where stash was created
+  baseCommitId: string | null;     // Commit ID HEAD pointed to when stashed
+  stagedSnapshot: Record<string, string>;   // Exact index state of tracked files at stash time
+  workingSnapshot: Record<string, string>;  // Exact workingTree state of tracked files at stash time
+}
+
+export interface PreMergeSnapshot {
+  workingTree: Record<string, string>;
+  index: Record<string, string>;
+  headCommitId: string | null;
+  activeBranch: string | null;
+}
+
+export interface GitMergeConflictState {
+  targetBranch: string;
+  targetCommitId: string;
+  baseCommitId: string;
+  conflictingPaths: string[];      // Paths currently holding conflict markers
+  resolvedPaths: string[];         // Paths where markers were removed and staged
+  preMergeSnapshot: PreMergeSnapshot;
+}
+
 export interface GitRepoState {
   isInitialized: boolean;
   workingTree: Record<string, string>; // path -> content
@@ -36,6 +62,8 @@ export interface GitRepoState {
   activeBranch: string | null;         // "main", "feature", etc. (null if detached HEAD)
   headCommitId: string | null;
   remotes: Record<string, GitRemoteRef>; // remoteName -> remote ref
+  stash: GitStashEntry[];              // LIFO stash stack
+  mergeState: GitMergeConflictState | null; // Active merge conflict state or null
 }
 
 export interface StateChangeSummary {

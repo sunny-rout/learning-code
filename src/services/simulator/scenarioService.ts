@@ -143,6 +143,40 @@ export const PRACTICE_SCENARIOS: Record<number, ScenarioDefinition> = {
       }
     },
   },
+
+  6: {
+    id: 6,
+    title: 'Exercise 6: Undo and Stash Operations',
+    subtitle: 'Advanced Git Undo & Stashing',
+    description: 'Discard unstaged changes, unstage staged files, stash work in progress, and reapply it safely.',
+    initialState: createPracticeExerciseState(6),
+    targetCommands: [
+      'git restore README.md',
+      'git restore --staged feature.txt',
+      'git stash',
+      'git stash pop',
+    ],
+    steps: [
+      'Discard unwanted modifications to README.md using `git restore README.md`',
+      'Unstage feature.txt using `git restore --staged feature.txt`',
+      'Stash your temporary work safely with `git stash`',
+      'Reapply your stashed work using `git stash pop`',
+    ],
+    isCompleted: (state: GitRepoState): boolean => {
+      const c1Id = state.headCommitId;
+      if (!c1Id || !state.commits[c1Id]) return false;
+      const headTree = state.commits[c1Id].tree;
+      if (state.workingTree['README.md'] !== headTree['README.md']) return false;
+
+      // feature.txt must be back in workingTree
+      if (!state.workingTree['feature.txt']) return false;
+
+      // Stash stack must be empty (popped)
+      if (state.stash && state.stash.length > 0) return false;
+
+      return !state.mergeState;
+    },
+  },
 };
 
 export function getScenarioById(id: number): ScenarioDefinition | undefined {

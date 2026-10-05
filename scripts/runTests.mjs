@@ -9,6 +9,7 @@ const tests = [
   'lessonAccessibility',
   'gitEngine',
   'gitMerge',
+  'gitAdvancedUndo',
   'scenarioValidation',
 ];
 
