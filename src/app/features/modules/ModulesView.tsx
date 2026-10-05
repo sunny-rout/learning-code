@@ -8,22 +8,27 @@ import {
   Search, 
   Sparkles,
   FileText,
-  X
+  Lock,
+  PlayCircle
 } from 'lucide-react';
 import { MODULES } from '@/data/modules';
 import { ModuleItem, NavigationTab } from '@/types';
+import { useProgress } from '@/hooks/useProgress';
+import { getLessonForModule } from '@/data/lessons';
 
 interface ModulesViewProps {
   selectedModuleId?: string;
   onSelectModuleId?: (id: string) => void;
   onNavigate?: (tab: NavigationTab) => void;
+  onStartLesson?: (lessonId: string) => void;
 }
 
 export const ModulesView: React.FC<ModulesViewProps> = ({ 
   selectedModuleId, 
   onSelectModuleId,
-  onNavigate 
+  onStartLesson 
 }) => {
+  const { getLessonProgress } = useProgress();
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [activeModule, setActiveModule] = useState<ModuleItem>(() => {
@@ -33,7 +38,6 @@ export const ModulesView: React.FC<ModulesViewProps> = ({
     }
     return MODULES[0];
   });
-  const [isLessonOpen, setIsLessonOpen] = useState<boolean>(false);
 
   // Sync external selectedModuleId
   React.useEffect(() => {
@@ -113,13 +117,32 @@ export const ModulesView: React.FC<ModulesViewProps> = ({
         <div className="lg:col-span-2 space-y-3">
           {filteredModules.map((module) => {
             const isSelected = activeModule.id === module.id;
+            const lesson = getLessonForModule(module.id);
+            const lessonProg = lesson ? getLessonProgress(lesson.id) : null;
+            const isCompleted = lessonProg ? lessonProg.completed : false;
+            const isInProgress = lessonProg
+              ? !isCompleted && (lessonProg.completedStepIds.length > 0 || Boolean(lessonProg.currentStepId))
+              : false;
+
             return (
               <div
                 key={module.id}
+                role="button"
+                tabIndex={0}
                 onClick={() => handleSelectModule(module)}
-                className={`p-4 rounded-xl border transition-all cursor-pointer ${
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    handleSelectModule(module);
+                  }
+                }}
+                className={`p-4 rounded-xl border transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary ${
                   isSelected
                     ? 'bg-bg-elevated border-brand-primary shadow-glow-primary'
+                    : isCompleted
+                    ? 'bg-emerald-500/[0.04] border-emerald-500/30 hover:border-emerald-500/60 hover:bg-bg-surface'
+                    : isInProgress
+                    ? 'bg-amber-500/[0.04] border-amber-500/30 hover:border-amber-500/60 hover:bg-bg-surface'
                     : 'bg-bg-surface/80 border-bg-border hover:border-bg-border/80 hover:bg-bg-surface'
                 }`}
               >
@@ -128,6 +151,8 @@ export const ModulesView: React.FC<ModulesViewProps> = ({
                     <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 font-mono text-xs font-bold ${
                       isSelected
                         ? 'bg-brand-primary text-white'
+                        : isCompleted
+                        ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
                         : 'bg-bg-dark border border-bg-border text-text-secondary'
                     }`}>
                       {String(module.number).padStart(2, '0')}
@@ -135,7 +160,27 @@ export const ModulesView: React.FC<ModulesViewProps> = ({
                     <div>
                       <div className="flex items-center gap-2">
                         <h3 className="text-sm font-bold text-white">{module.title}</h3>
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-bg-dark border border-bg-border text-text-muted">
+                        
+                        {isCompleted ? (
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 font-semibold flex items-center gap-1">
+                            <CheckCircle2 className="w-3 h-3" />
+                            <span>Completed</span>
+                          </span>
+                        ) : isInProgress ? (
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-300 font-semibold">
+                            In Progress ({lessonProg?.completedStepIds.length ?? 0}/{lesson ? lesson.steps.length : '?'})
+                          </span>
+                        ) : lesson ? (
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-brand-primary/10 border border-brand-primary/20 text-brand-accent font-semibold">
+                            Ready
+                          </span>
+                        ) : (
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-bg-dark border border-bg-border text-text-muted">
+                            Syllabus
+                          </span>
+                        )}
+
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-bg-dark border border-bg-border text-text-muted hidden sm:inline">
                           {module.category}
                         </span>
                       </div>
@@ -172,183 +217,152 @@ export const ModulesView: React.FC<ModulesViewProps> = ({
 
         {/* Selected Module Detail Panel */}
         <div className="lg:col-span-1">
-          <div className="sticky top-20 rounded-2xl bg-bg-surface border border-bg-border p-5 space-y-5 shadow-glass">
-            <div className="flex items-center justify-between pb-3 border-b border-bg-border">
-              <span className="text-xs font-mono font-semibold text-brand-accent">
-                UNIT {String(activeModule.number).padStart(2, '0')} PREVIEW
-              </span>
-              <span className="text-[10px] px-2 py-0.5 rounded-full bg-brand-primary/10 text-brand-primary font-medium border border-brand-primary/20">
-                PDF Source: Sec {activeModule.pdfSection}
-              </span>
-            </div>
+          {(() => {
+            const activeLesson = getLessonForModule(activeModule.id);
+            const activeLessonProg = activeLesson ? getLessonProgress(activeLesson.id) : null;
+            const isCompleted = activeLessonProg ? activeLessonProg.completed : false;
+            const isInProgress = activeLessonProg
+              ? !isCompleted && (activeLessonProg.completedStepIds.length > 0 || Boolean(activeLessonProg.currentStepId))
+              : false;
 
-            <div>
-              <h2 className="text-lg font-bold text-white">{activeModule.title}</h2>
-              <p className="text-xs text-text-secondary mt-2 leading-relaxed">
-                {activeModule.description}
-              </p>
-            </div>
+            return (
+              <div className="sticky top-20 rounded-2xl bg-bg-surface border border-bg-border p-5 space-y-5 shadow-glass">
+                <div className="flex items-center justify-between pb-3 border-b border-bg-border">
+                  <span className="text-xs font-mono font-semibold text-brand-accent">
+                    UNIT {String(activeModule.number).padStart(2, '0')} OVERVIEW
+                  </span>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-brand-primary/10 text-brand-primary font-medium border border-brand-primary/20">
+                    PDF Source: Sec {activeModule.pdfSection}
+                  </span>
+                </div>
 
-            {/* Learning Phases Inside This Module */}
-            <div className="space-y-2">
-              <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wider">
-                Module Breakdown
-              </h4>
-              <div className="space-y-1.5 text-xs text-text-secondary">
-                <div className="p-2 rounded-lg bg-bg-dark/60 border border-bg-border/60 flex items-center justify-between">
-                  <span>1. Intuition & Real-world Analogy</span>
-                  <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
-                </div>
-                <div className="p-2 rounded-lg bg-bg-dark/60 border border-bg-border/60 flex items-center justify-between">
-                  <span>2. Visual State Diagram</span>
-                  <FileText className="w-3.5 h-3.5 text-sky-400" />
-                </div>
-                <div className="p-2 rounded-lg bg-bg-dark/60 border border-bg-border/60 flex items-center justify-between">
-                  <span>3. Terminal Simulator Practice</span>
-                  <Terminal className="w-3.5 h-3.5 text-emerald-400" />
-                </div>
-                <div className="p-2 rounded-lg bg-bg-dark/60 border border-bg-border/60 flex items-center justify-between">
-                  <span>4. Quick Knowledge Check</span>
-                  <CheckCircle2 className="w-3.5 h-3.5 text-amber-400" />
-                </div>
-              </div>
-            </div>
-
-            {/* Command targets */}
-            <div className="space-y-2">
-              <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wider">
-                Target Commands
-              </h4>
-              <div className="space-y-1">
-                {activeModule.commands.map((cmd, idx) => (
-                  <div key={idx} className="font-mono text-xs px-2.5 py-1.5 rounded-lg bg-bg-dark border border-bg-border text-brand-accent">
-                    $ {cmd}
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <h2 className="text-lg font-bold text-white">{activeModule.title}</h2>
                   </div>
-                ))}
-              </div>
-            </div>
+                  <p className="text-xs text-text-secondary mt-1 leading-relaxed">
+                    {activeLesson?.subtitle || activeModule.description}
+                  </p>
+                </div>
 
-            <button 
-              onClick={() => setIsLessonOpen(true)}
-              className="w-full py-2.5 rounded-xl bg-brand-primary hover:bg-brand-primary-hover text-white text-xs font-bold shadow-glow-primary transition-all flex items-center justify-center gap-2 active:scale-95"
-            >
-              <span>Start Unit {activeModule.number}</span>
-              <ArrowRight className="w-4 h-4" />
-            </button>
-          </div>
+                {/* Learning Steps / Breakdown */}
+                <div className="space-y-2">
+                  <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wider">
+                    {activeLesson ? 'Curriculum Steps' : 'Module Breakdown'}
+                  </h4>
+                  {activeLesson ? (
+                    <div className="space-y-1.5 text-xs text-text-secondary">
+                      {activeLesson.steps.map((step, idx) => {
+                        const isStepDone = activeLessonProg?.completedStepIds.includes(step.id);
+                        return (
+                          <div 
+                            key={step.id} 
+                            className={`p-2 rounded-lg border flex items-center justify-between ${
+                              isStepDone 
+                                ? 'bg-emerald-500/[0.06] border-emerald-500/20 text-emerald-300' 
+                                : 'bg-bg-dark/60 border-bg-border/60'
+                            }`}
+                          >
+                            <span className="truncate max-w-[200px]">
+                              {idx + 1}. {step.title}
+                            </span>
+                            {isStepDone ? (
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                            ) : step.knowledgeCheck ? (
+                              <CheckCircle2 className="w-3.5 h-3.5 text-amber-400/60 shrink-0" />
+                            ) : (
+                              <FileText className="w-3.5 h-3.5 text-text-muted shrink-0" />
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="space-y-1.5 text-xs text-text-secondary">
+                      <div className="p-2 rounded-lg bg-bg-dark/60 border border-bg-border/60 flex items-center justify-between">
+                        <span>1. Intuition & Real-world Analogy</span>
+                        <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+                      </div>
+                      <div className="p-2 rounded-lg bg-bg-dark/60 border border-bg-border/60 flex items-center justify-between">
+                        <span>2. Visual State Diagram</span>
+                        <FileText className="w-3.5 h-3.5 text-sky-400" />
+                      </div>
+                      <div className="p-2 rounded-lg bg-bg-dark/60 border border-bg-border/60 flex items-center justify-between">
+                        <span>3. Terminal Simulator Practice</span>
+                        <Terminal className="w-3.5 h-3.5 text-emerald-400" />
+                      </div>
+                      <div className="p-2 rounded-lg bg-bg-dark/60 border border-bg-border/60 flex items-center justify-between">
+                        <span>4. Quick Knowledge Check</span>
+                        <CheckCircle2 className="w-3.5 h-3.5 text-amber-400" />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Command targets */}
+                <div className="space-y-2">
+                  <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wider">
+                    Target Commands
+                  </h4>
+                  <div className="space-y-1">
+                    {activeModule.commands.map((cmd, idx) => (
+                      <div key={idx} className="font-mono text-xs px-2.5 py-1.5 rounded-lg bg-bg-dark border border-bg-border text-brand-accent">
+                        $ {cmd}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Primary Action Button */}
+                {activeLesson ? (
+                  <button 
+                    type="button"
+                    onClick={() => onStartLesson && onStartLesson(activeLesson.id)}
+                    className={`w-full py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary ${
+                      isCompleted
+                        ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-glow-green'
+                        : isInProgress
+                        ? 'bg-brand-primary hover:bg-brand-primary-hover text-white shadow-glow-primary'
+                        : 'bg-brand-primary hover:bg-brand-primary-hover text-white shadow-glow-primary'
+                    }`}
+                  >
+                    {isCompleted ? (
+                      <>
+                        <PlayCircle className="w-4 h-4" />
+                        <span>Review Unit {activeModule.number}</span>
+                      </>
+                    ) : isInProgress ? (
+                      <>
+                        <span>Resume Unit {activeModule.number}</span>
+                        <ArrowRight className="w-4 h-4" />
+                      </>
+                    ) : (
+                      <>
+                        <span>Start Unit {activeModule.number}</span>
+                        <ArrowRight className="w-4 h-4" />
+                      </>
+                    )}
+                  </button>
+                ) : (
+                  <div className="space-y-2">
+                    <button 
+                      type="button"
+                      disabled
+                      className="w-full py-2.5 rounded-xl bg-bg-elevated border border-bg-border text-text-muted text-xs font-semibold cursor-not-allowed flex items-center justify-center gap-2"
+                    >
+                      <Lock className="w-3.5 h-3.5" />
+                      <span>Interactive Unit Coming in Phase 3</span>
+                    </button>
+                    <p className="text-[11px] text-text-muted text-center leading-relaxed">
+                      Syllabus & practice exercises are available in the Practice section.
+                    </p>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
         </div>
       </div>
-
-      {/* Lesson Modal / Drawer */}
-      {isLessonOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-fadeIn">
-          <div className="w-full max-w-2xl bg-bg-surface border border-bg-border rounded-2xl p-6 shadow-2xl space-y-5 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 border-b border-bg-border">
-              <div className="flex items-center gap-2.5">
-                <span className="font-mono text-xs font-bold px-2 py-0.5 rounded bg-brand-primary/20 text-brand-accent">
-                  UNIT {String(activeModule.number).padStart(2, '0')}
-                </span>
-                <span className="text-xs text-text-muted">PDF Source: Section {activeModule.pdfSection}</span>
-              </div>
-              <button
-                onClick={() => setIsLessonOpen(false)}
-                className="p-1 rounded-lg hover:bg-bg-elevated text-text-muted hover:text-white transition-colors"
-                aria-label="Close modal"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div>
-              <h2 className="text-xl font-bold text-white">{activeModule.title}</h2>
-              <p className="text-sm text-text-secondary mt-1.5 leading-relaxed">{activeModule.description}</p>
-            </div>
-
-            {/* 6-step curriculum roadmap inside unit */}
-            <div className="space-y-3">
-              <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wider">
-                Interactive Learning Breakdown
-              </h4>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                <div className="p-3 rounded-xl bg-bg-dark border border-indigo-500/20 space-y-1">
-                  <span className="font-bold text-indigo-300">1. Intuition & Real-World Analogy</span>
-                  <p className="text-text-muted text-[11px]">
-                    Mental models that make Git behavior instantly click for beginners.
-                  </p>
-                </div>
-                <div className="p-3 rounded-xl bg-bg-dark border border-sky-500/20 space-y-1">
-                  <span className="font-bold text-sky-300">2. 4-Stage State Diagram</span>
-                  <p className="text-text-muted text-[11px]">
-                    See how files transition between Working Dir, Staging, Local Repo & Remote.
-                  </p>
-                </div>
-                <div className="p-3 rounded-xl bg-bg-dark border border-emerald-500/20 space-y-1">
-                  <span className="font-bold text-emerald-300">3. Terminal Sandbox Practice</span>
-                  <p className="text-text-muted text-[11px]">
-                    Practice target commands with real-time feedback and state verification.
-                  </p>
-                </div>
-                <div className="p-3 rounded-xl bg-bg-dark border border-amber-500/20 space-y-1">
-                  <span className="font-bold text-amber-300">4. Knowledge Check Quiz</span>
-                  <p className="text-text-muted text-[11px]">
-                    Validate key syntax, flags, and common pitfalls before moving to next unit.
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* Target Commands */}
-            <div className="space-y-2">
-              <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wider">
-                Commands Covered
-              </h4>
-              <div className="flex flex-wrap gap-2">
-                {activeModule.commands.map((cmd, idx) => (
-                  <span key={idx} className="font-mono text-xs px-3 py-1.5 rounded-lg bg-bg-dark border border-bg-border text-brand-accent">
-                    $ {cmd}
-                  </span>
-                ))}
-              </div>
-            </div>
-
-            {/* Action buttons */}
-            <div className="pt-4 border-t border-bg-border flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                {onNavigate && (
-                  <button
-                    onClick={() => {
-                      setIsLessonOpen(false);
-                      onNavigate('playground');
-                    }}
-                    className="px-4 py-2 rounded-xl bg-bg-elevated hover:bg-bg-border text-white text-xs font-semibold flex items-center gap-1.5 transition-colors"
-                  >
-                    <Terminal className="w-3.5 h-3.5 text-brand-secondary" />
-                    <span>Try in Sandbox</span>
-                  </button>
-                )}
-                {onNavigate && (
-                  <button
-                    onClick={() => {
-                      setIsLessonOpen(false);
-                      onNavigate('practice');
-                    }}
-                    className="px-4 py-2 rounded-xl bg-bg-elevated hover:bg-bg-border text-white text-xs font-semibold transition-colors"
-                  >
-                    <span>Practice Exercises</span>
-                  </button>
-                )}
-              </div>
-
-              <button
-                onClick={() => setIsLessonOpen(false)}
-                className="px-5 py-2 rounded-xl bg-brand-primary hover:bg-brand-primary-hover text-white text-xs font-bold transition-all"
-              >
-                Close Preview
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

@@ -16,9 +16,19 @@ interface LayoutProps {
   children: React.ReactNode;
   activeTab: NavigationTab;
   setActiveTab: (tab: NavigationTab) => void;
+  streakDays?: number;
+  completedCount?: number;
+  totalModules?: number;
 }
 
-export const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTab }) => {
+export const Layout: React.FC<LayoutProps> = ({ 
+  children, 
+  activeTab, 
+  setActiveTab,
+  streakDays,
+  completedCount,
+  totalModules
+}) => {
   const mobileNavItems: { id: NavigationTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
     { id: 'dashboard', label: 'Home', icon: LayoutDashboard },
     { id: 'learn', label: 'Learn', icon: BookOpen },
@@ -31,7 +41,13 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTa
 
   return (
     <div className="min-h-screen flex flex-col bg-bg-dark text-text-primary">
-      <Header activeTab={activeTab} setActiveTab={setActiveTab} />
+      <Header 
+        activeTab={activeTab} 
+        setActiveTab={setActiveTab} 
+        streakDays={streakDays}
+        completedCount={completedCount}
+        totalModules={totalModules}
+      />
       
       <div className="flex-1 flex overflow-hidden">
         <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />

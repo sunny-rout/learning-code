@@ -5,21 +5,79 @@ import {
   ArrowRight, 
   GitCommit, 
   Award,
-  Sparkles
+  Sparkles,
+  CheckCircle2,
+  PlayCircle
 } from 'lucide-react';
 import { MODULES } from '@/data/modules';
 import { NavigationTab } from '@/types';
+import { useProgress } from '@/hooks/useProgress';
+import { FOUNDATIONAL_LESSONS, getLessonById, getLessonForModule } from '@/data/lessons';
+import { Lesson } from '@/types/lesson';
 
 interface DashboardViewProps {
   onNavigate: (tab: NavigationTab) => void;
   onSelectModule?: (moduleId: string) => void;
+  onStartLesson?: (lessonId: string) => void;
+  onResumeLesson?: () => void;
 }
 
-export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate, onSelectModule }) => {
-  const currentModule = MODULES[3]; // Staging and Committing (Module 4)
+export const DashboardView: React.FC<DashboardViewProps> = ({ 
+  onNavigate, 
+  onSelectModule,
+  onStartLesson,
+  onResumeLesson
+}) => {
+  const { progress, getLessonProgress } = useProgress();
+
+  const completedLessonsCount = FOUNDATIONAL_LESSONS.filter(
+    (l) => progress.lessonProgress[l.id]?.completed
+  ).length;
+  const allCompleted = completedLessonsCount === FOUNDATIONAL_LESSONS.length;
+
+  // Dynamically determine resume lesson target (never points to unauthored lessons)
+  let targetLesson: Lesson = FOUNDATIONAL_LESSONS[0];
+  if (!allCompleted) {
+    if (
+      progress.lastOpenedLessonId &&
+      getLessonById(progress.lastOpenedLessonId) &&
+      !progress.lessonProgress[progress.lastOpenedLessonId]?.completed
+    ) {
+      targetLesson = getLessonById(progress.lastOpenedLessonId)!;
+    } else {
+      const firstIncomplete = FOUNDATIONAL_LESSONS.find(
+        (l) => !progress.lessonProgress[l.id]?.completed
+      );
+      if (firstIncomplete) {
+        targetLesson = firstIncomplete;
+      }
+    }
+  } else {
+    // When all authored units are completed, allow reviewing last opened (if authored) or unit 1
+    if (progress.lastOpenedLessonId && getLessonById(progress.lastOpenedLessonId)) {
+      targetLesson = getLessonById(progress.lastOpenedLessonId)!;
+    }
+  }
+
+  const currentModule = MODULES.find((m) => m.id === targetLesson.moduleId) || MODULES[0];
+  const targetProgress = getLessonProgress(targetLesson.id);
+  const overallPercentage = Math.round((completedLessonsCount / FOUNDATIONAL_LESSONS.length) * 100);
+
+  const handleResumeClick = () => {
+    if (onResumeLesson) {
+      onResumeLesson();
+    } else if (onStartLesson) {
+      onStartLesson(targetLesson.id);
+    } else {
+      handleModuleClick(currentModule.id);
+    }
+  };
 
   const handleModuleClick = (moduleId: string) => {
-    if (onSelectModule) {
+    const lesson = getLessonForModule(moduleId);
+    if (lesson && onStartLesson) {
+      onStartLesson(lesson.id);
+    } else if (onSelectModule) {
       onSelectModule(moduleId);
     } else {
       onNavigate('learn');
@@ -53,16 +111,18 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate, onSele
 
             <div className="flex flex-wrap items-center gap-3 pt-2">
               <button
-                onClick={() => onNavigate('learn')}
-                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-brand-primary hover:bg-brand-primary-hover text-white text-sm font-semibold shadow-glow-primary transition-all active:scale-95"
+                type="button"
+                onClick={handleResumeClick}
+                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-brand-primary hover:bg-brand-primary-hover text-white text-sm font-semibold shadow-glow-primary transition-all active:scale-95 focus-visible:ring-2 focus-visible:ring-brand-primary"
               >
-                <span>Continue Learning</span>
+                <span>{allCompleted ? 'Review Lessons' : 'Continue Learning'}</span>
                 <ArrowRight className="w-4 h-4" />
               </button>
 
               <button
+                type="button"
                 onClick={() => onNavigate('playground')}
-                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-bg-elevated hover:bg-bg-border border border-bg-border text-text-primary text-sm font-semibold transition-all hover:border-brand-primary/40"
+                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-bg-elevated hover:bg-bg-border border border-bg-border text-text-primary text-sm font-semibold transition-all hover:border-brand-primary/40 focus-visible:ring-2 focus-visible:ring-brand-primary"
               >
                 <Terminal className="w-4 h-4 text-brand-secondary" />
                 <span>Open Simulator</span>
@@ -73,36 +133,61 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate, onSele
           {/* Quick Continue Card */}
           <div className="w-full lg:w-80 p-5 rounded-xl bg-bg-dark/60 border border-bg-border/80 backdrop-blur-md space-y-4">
             <div className="flex items-center justify-between text-xs text-text-muted">
-              <span className="uppercase tracking-wider font-semibold text-brand-accent">Up Next</span>
-              <span>Unit {currentModule.number} of {MODULES.length}</span>
+              <span className="uppercase tracking-wider font-semibold text-brand-accent">
+                {allCompleted ? '🎉 Core Curriculum Mastered' : targetProgress.completed ? 'Review Unit' : 'Up Next'}
+              </span>
+              <span>{allCompleted ? 'All 6 Units Completed' : `Unit ${currentModule.number} of ${MODULES.length}`}</span>
             </div>
 
             <div>
               <h3 className="text-base font-bold text-white flex items-center gap-2">
-                <span>{currentModule.title}</span>
+                <span>{targetLesson.title}</span>
               </h3>
               <p className="text-xs text-text-secondary mt-1 line-clamp-2">
-                {currentModule.description}
+                {targetLesson.subtitle || currentModule.description}
               </p>
             </div>
 
             {/* Progress mini bar */}
             <div className="space-y-1.5">
               <div className="flex justify-between text-[11px] text-text-muted">
-                <span>Overall Progress</span>
-                <span className="text-text-primary font-medium">24%</span>
+                <span>Core Curriculum Progress</span>
+                <span className="text-text-primary font-medium">{overallPercentage}% ({completedLessonsCount}/{FOUNDATIONAL_LESSONS.length})</span>
               </div>
               <div className="w-full h-2 rounded-full bg-bg-elevated overflow-hidden">
-                <div className="h-full bg-gradient-to-r from-brand-primary to-brand-accent rounded-full w-[24%]" />
+                <div 
+                  className="h-full bg-gradient-to-r from-brand-primary to-brand-accent rounded-full transition-all duration-500" 
+                  style={{ width: `${overallPercentage}%` }} 
+                />
               </div>
             </div>
 
             <button
-              onClick={() => handleModuleClick(currentModule.id)}
-              className="w-full py-2 px-3 rounded-lg bg-bg-elevated hover:bg-brand-primary/20 border border-brand-primary/30 text-brand-accent text-xs font-semibold flex items-center justify-center gap-2 transition-all"
+              type="button"
+              onClick={handleResumeClick}
+              className="w-full py-2 px-3 rounded-lg bg-bg-elevated hover:bg-brand-primary/20 border border-brand-primary/30 text-brand-accent text-xs font-semibold flex items-center justify-center gap-2 transition-all focus-visible:ring-2 focus-visible:ring-brand-primary"
             >
-              <span>Resume Lesson</span>
-              <ArrowRight className="w-3.5 h-3.5" />
+              {allCompleted ? (
+                <>
+                  <PlayCircle className="w-3.5 h-3.5" />
+                  <span>Review Curriculum (Unit {currentModule.number})</span>
+                </>
+              ) : targetProgress.completed ? (
+                <>
+                  <PlayCircle className="w-3.5 h-3.5" />
+                  <span>Review Unit {currentModule.number}</span>
+                </>
+              ) : targetProgress.completedStepIds.length > 0 || targetProgress.currentStepId ? (
+                <>
+                  <span>Resume Unit {currentModule.number}</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </>
+              ) : (
+                <>
+                  <span>Start Unit {currentModule.number}</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </>
+              )}
             </button>
           </div>
         </div>
@@ -210,31 +295,70 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate, onSele
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {MODULES.slice(0, 6).map((module) => (
-            <div
-              key={module.id}
-              onClick={() => handleModuleClick(module.id)}
-              className="p-4 rounded-xl bg-bg-surface/70 border border-bg-border hover:border-brand-primary/40 transition-all cursor-pointer hover:bg-bg-elevated/40 flex flex-col justify-between"
-            >
-              <div>
-                <div className="flex items-center justify-between text-xs mb-2">
-                  <span className="font-mono text-brand-accent font-semibold">Unit {String(module.number).padStart(2, '0')}</span>
-                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-bg-dark border border-bg-border text-text-muted">
-                    {module.category}
-                  </span>
-                </div>
-                <h4 className="font-semibold text-sm text-white">{module.title}</h4>
-                <p className="text-xs text-text-secondary mt-1 line-clamp-2 leading-relaxed">
-                  {module.description}
-                </p>
-              </div>
+          {MODULES.slice(0, 6).map((module) => {
+            const lesson = getLessonForModule(module.id);
+            const lessonProg = lesson ? getLessonProgress(lesson.id) : null;
+            const isCompleted = lessonProg ? lessonProg.completed : false;
+            const isInProgress = lessonProg
+              ? !isCompleted && (lessonProg.completedStepIds.length > 0 || Boolean(lessonProg.currentStepId))
+              : false;
 
-              <div className="mt-4 pt-3 border-t border-bg-border/60 flex items-center justify-between text-[11px] text-text-muted">
-                <span>{module.durationMinutes} mins</span>
-                <span className="font-mono text-text-secondary">{module.commands[0]}</span>
+            return (
+              <div
+                key={module.id}
+                role="button"
+                tabIndex={0}
+                onClick={() => handleModuleClick(module.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    handleModuleClick(module.id);
+                  }
+                }}
+                className={`p-4 rounded-xl border transition-all cursor-pointer flex flex-col justify-between focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary ${
+                  isCompleted
+                    ? 'bg-emerald-500/[0.04] border-emerald-500/30 hover:border-emerald-500/60'
+                    : isInProgress
+                    ? 'bg-amber-500/[0.04] border-amber-500/30 hover:border-amber-500/60'
+                    : 'bg-bg-surface/70 border-bg-border hover:border-brand-primary/40 hover:bg-bg-elevated/40'
+                }`}
+              >
+                <div>
+                  <div className="flex items-center justify-between text-xs mb-2">
+                    <span className="font-mono text-brand-accent font-semibold">Unit {String(module.number).padStart(2, '0')}</span>
+                    
+                    {isCompleted ? (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 font-semibold flex items-center gap-1">
+                        <CheckCircle2 className="w-3 h-3" />
+                        <span>Completed</span>
+                      </span>
+                    ) : isInProgress ? (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-300 font-semibold">
+                        In Progress
+                      </span>
+                    ) : lesson ? (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-brand-primary/10 border border-brand-primary/20 text-brand-accent font-semibold">
+                        Ready
+                      </span>
+                    ) : (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-bg-dark border border-bg-border text-text-muted">
+                        {module.category}
+                      </span>
+                    )}
+                  </div>
+                  <h4 className="font-semibold text-sm text-white">{module.title}</h4>
+                  <p className="text-xs text-text-secondary mt-1 line-clamp-2 leading-relaxed">
+                    {module.description}
+                  </p>
+                </div>
+
+                <div className="mt-4 pt-3 border-t border-bg-border/60 flex items-center justify-between text-[11px] text-text-muted">
+                  <span>{module.durationMinutes} mins</span>
+                  <span className="font-mono text-text-secondary">{module.commands[0]}</span>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </div>
