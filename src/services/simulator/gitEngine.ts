@@ -8,6 +8,7 @@ import {
   PreMergeSnapshot,
 } from '@/types/simulator';
 import { parseCommandLine } from './commandParser';
+import { getRemoteFixture, getOrCreateRemoteFixture } from './remoteFixtures';
 import {
   hasPath,
   createDeterministicCommitId,
@@ -277,6 +278,10 @@ function handleHelp(state: GitRepoState): CommandResult {
       '  git remote add <name> <url> Register a remote repository (e.g. origin)',
       '  git remote -v               List registered remote repositories',
       '  git push [-u] <rem> <br>    Push commits to simulated remote',
+      '  git fetch [<remote>]        Download objects and refs from remote',
+      '  git pull [<remote>] [<br>]  Fetch and integrate with local branch',
+      '  git clone <url>             Clone a repository into a new workspace',
+      '  git show [<object>]         Show commit details and unified diff',
       '  touch / echo / rm / cat     In-memory file creation and manipulation',
       '  clear / help                Console screen utilities',
     ],
@@ -335,6 +340,11 @@ function handleGitCommand(
         affectedStages: ['local'],
       },
     };
+  }
+
+  // 1b. git clone (operates on uninitialized sandbox)
+  if (subcommand === 'clone') {
+    return handleGitClone(state, args);
   }
 
   // All other commands require repository to be initialized
@@ -423,6 +433,21 @@ function handleGitCommand(
   // 15. git push
   if (subcommand === 'push') {
     return handleGitPush(state, flags, args);
+  }
+
+  // 16. git fetch
+  if (subcommand === 'fetch') {
+    return handleGitFetch(state, flags, args);
+  }
+
+  // 17. git pull
+  if (subcommand === 'pull') {
+    return handleGitPull(state, flags, args, headTree);
+  }
+
+  // 18. git show
+  if (subcommand === 'show') {
+    return handleGitShow(state, flags, args);
   }
 
   return {
@@ -1072,6 +1097,96 @@ function handleGitBranch(
     };
   }
 
+  // Flags
+  const isRemoteOnly = Boolean(flags['r'] || flags['remotes']);
+  const isAll = Boolean(flags['a'] || flags['all']);
+  const isVeryVerbose = Boolean(flags['vv']);
+  const isSetUpstream = Boolean(flags['u'] || flags['set-upstream-to']);
+
+  if (isSetUpstream) {
+    const upstreamSpec = typeof flags['u'] === 'string'
+      ? flags['u']
+      : typeof flags['set-upstream-to'] === 'string'
+      ? flags['set-upstream-to']
+      : args[0];
+    const targetBranch = (typeof flags['u'] === 'string' || typeof flags['set-upstream-to'] === 'string')
+      ? (args[0] || state.activeBranch)
+      : (args[1] || state.activeBranch);
+
+    if (!targetBranch || !state.branches[targetBranch]) {
+      return {
+        nextState: state,
+        stdout: [],
+        stderr: [`fatal: branch '${targetBranch}' not found`],
+        exitCode: 1,
+      };
+    }
+
+    if (upstreamSpec.includes('/')) {
+      const [rName, bName] = upstreamSpec.split('/');
+      if (!state.remotes[rName] || !state.remotes[rName].branches[bName]) {
+        return {
+          nextState: state,
+          stdout: [],
+          stderr: [`error: the requested upstream branch '${upstreamSpec}' does not exist`],
+          exitCode: 1,
+        };
+      }
+    }
+
+    const nextBranches = {
+      ...state.branches,
+      [targetBranch]: {
+        ...state.branches[targetBranch],
+        upstream: upstreamSpec,
+      },
+    };
+
+    return {
+      nextState: { ...state, branches: nextBranches },
+      stdout: [`branch '${targetBranch}' set up to track '${upstreamSpec}'.`],
+      stderr: [],
+      exitCode: 0,
+    };
+  }
+
+  if (isRemoteOnly) {
+    const lines: string[] = [];
+    for (const [rName, rRef] of Object.entries(state.remotes)) {
+      for (const bName of Object.keys(rRef.branches).sort()) {
+        lines.push(`  ${rName}/${bName}`);
+      }
+    }
+    return {
+      nextState: state,
+      stdout: lines,
+      stderr: [],
+      exitCode: 0,
+    };
+  }
+
+  if (isAll) {
+    const lines: string[] = [];
+    for (const bName of Object.keys(state.branches).sort()) {
+      if (bName === state.activeBranch) {
+        lines.push(`* ${bName}`);
+      } else {
+        lines.push(`  ${bName}`);
+      }
+    }
+    for (const [rName, rRef] of Object.entries(state.remotes)) {
+      for (const bName of Object.keys(rRef.branches).sort()) {
+        lines.push(`  remotes/${rName}/${bName}`);
+      }
+    }
+    return {
+      nextState: state,
+      stdout: lines,
+      stderr: [],
+      exitCode: 0,
+    };
+  }
+
   // Branch creation: git branch <name>
   if (args.length > 0) {
     const branchName = args[0];
@@ -1109,13 +1224,20 @@ function handleGitBranch(
     };
   }
 
-  // Listing branches
+  // Listing branches (default / -vv)
   const lines: string[] = [];
   for (const bName of Object.keys(state.branches).sort()) {
-    if (bName === state.activeBranch) {
-      lines.push(`* \x1b[32m${bName}\x1b[0m`);
+    const bRef = state.branches[bName];
+    const isCur = bName === state.activeBranch;
+    const prefix = isCur ? `* ${bName}` : `  ${bName}`;
+
+    if (isVeryVerbose) {
+      const cId = bRef.commitId ? bRef.commitId.slice(0, 7) : '0000000';
+      const cMsg = bRef.commitId && state.commits[bRef.commitId] ? state.commits[bRef.commitId].message : '';
+      const tracking = bRef.upstream ? `[${bRef.upstream}] ` : '';
+      lines.push(`${prefix.padEnd(20)} ${cId} ${tracking}${cMsg}`);
     } else {
-      lines.push(`  ${bName}`);
+      lines.push(prefix);
     }
   }
 
@@ -2237,6 +2359,26 @@ function handleGitPush(
     branchName = args[1];
   } else if (args.length === 1) {
     remoteName = args[0];
+  } else {
+    // Zero arguments: resolve upstream tracking
+    const currBranch = state.activeBranch ? state.branches[state.activeBranch] : null;
+    if (currBranch?.upstream) {
+      const parts = currBranch.upstream.split('/');
+      remoteName = parts[0];
+      branchName = parts.slice(1).join('/');
+    } else {
+      return {
+        nextState: state,
+        stdout: [],
+        stderr: [
+          `fatal: The current branch ${state.activeBranch || 'main'} has no upstream branch.`,
+          `To push the current branch and set the remote as upstream, use`,
+          ``,
+          `    git push --set-upstream origin ${state.activeBranch || 'main'}`,
+        ],
+        exitCode: 1,
+      };
+    }
   }
 
   const remote = state.remotes[remoteName];
@@ -2281,6 +2423,13 @@ function handleGitPush(
     }
   }
 
+  // Update in-memory remote fixture as well
+  const fixture = getOrCreateRemoteFixture(remote.url);
+  for (const [cId, commit] of Object.entries(reachableCommits)) {
+    fixture.commits[cId] = commit;
+  }
+  fixture.branches[branchName] = localBranch.commitId;
+
   const nextRemotes: Record<string, GitRemoteRef> = {
     ...state.remotes,
     [remoteName]: {
@@ -2294,7 +2443,8 @@ function handleGitPush(
   };
 
   const nextBranches = { ...state.branches };
-  if (flags['u']) {
+  const isSetUpstream = Boolean(flags['u'] || flags['set-upstream']);
+  if (isSetUpstream) {
     nextBranches[branchName] = {
       ...localBranch,
       upstream: `${remoteName}/${branchName}`,
@@ -2312,7 +2462,7 @@ function handleGitPush(
       `Writing objects: 100% (${visited.size}/${visited.size}), done.`,
       `To ${remote.url}`,
       ` * [new branch]      ${branchName} -> ${branchName}`,
-      flags['u'] ? `branch '${branchName}' set up to track '${remoteName}/${branchName}'.` : '',
+      isSetUpstream ? `branch '${branchName}' set up to track '${remoteName}/${branchName}'.` : '',
     ].filter(Boolean),
     stderr: [],
     exitCode: 0,
@@ -2321,5 +2471,584 @@ function handleGitPush(
       description: `Transferred ${visited.size} commit object(s) to '${remoteName}'. Remote branch is synchronized with local HEAD.`,
       affectedStages: ['local', 'remote'],
     },
+  };
+}
+
+function handleGitFetch(
+  state: GitRepoState,
+  _flags: Record<string, string | boolean>,
+  args: string[]
+): CommandResult {
+  const remoteName = args[0] || 'origin';
+  const remote = state.remotes[remoteName];
+  if (!remote) {
+    return {
+      nextState: state,
+      stdout: [],
+      stderr: [
+        `fatal: '${remoteName}' does not appear to be a git repository`,
+        "fatal: Could not read from remote repository.",
+      ],
+      exitCode: 128,
+    };
+  }
+
+  const fixture = getRemoteFixture(remote.url) || getOrCreateRemoteFixture(remote.url);
+  const nextCommits = { ...state.commits };
+  const nextRemoteCommits = { ...remote.commits };
+  const nextRemoteBranches = { ...remote.branches };
+  const outputLines: string[] = [`From ${remote.url}`];
+
+  for (const [bName, remoteCommitId] of Object.entries(fixture.branches)) {
+    // Ingest all reachable commits from remoteCommitId
+    const queue = [remoteCommitId];
+    const visited = new Set<string>();
+    while (queue.length > 0) {
+      const cId = queue.shift()!;
+      if (visited.has(cId)) continue;
+      visited.add(cId);
+
+      const commit = fixture.commits[cId];
+      if (commit) {
+        nextCommits[cId] = commit;
+        nextRemoteCommits[cId] = commit;
+        for (const pId of commit.parentIds) {
+          queue.push(pId);
+        }
+      }
+    }
+
+    const prevCommitId = remote.branches[bName];
+    nextRemoteBranches[bName] = remoteCommitId;
+
+    if (!prevCommitId) {
+      outputLines.push(` * [new branch]      ${bName}       -> ${remoteName}/${bName}`);
+    } else if (prevCommitId !== remoteCommitId) {
+      outputLines.push(`   ${prevCommitId.slice(0, 7)}..${remoteCommitId.slice(0, 7)}  ${bName}       -> ${remoteName}/${bName}`);
+    }
+  }
+
+  const nextRemotes: Record<string, GitRemoteRef> = {
+    ...state.remotes,
+    [remoteName]: {
+      ...remote,
+      commits: nextRemoteCommits,
+      branches: nextRemoteBranches,
+    },
+  };
+
+  return {
+    nextState: {
+      ...state,
+      commits: nextCommits,
+      remotes: nextRemotes,
+    },
+    stdout: outputLines,
+    stderr: [],
+    exitCode: 0,
+    explanation: {
+      title: `Fetched from Remote '${remoteName}'`,
+      description: `Synchronized remote tracking references (${remoteName}/*) and commit objects. Local HEAD, branches, and working tree were untouched.`,
+      affectedStages: ['remote'],
+    },
+  };
+}
+
+function handleGitPull(
+  state: GitRepoState,
+  _flags: Record<string, string | boolean>,
+  args: string[],
+  headTree: Record<string, string>
+): CommandResult {
+  const dirtyCheck = evaluateDirtyTree(state.workingTree, state.index, headTree);
+
+  let remoteName = 'origin';
+  let branchName = state.activeBranch || 'main';
+
+  if (args.length >= 2) {
+    remoteName = args[0];
+    branchName = args[1];
+  } else if (args.length === 1) {
+    remoteName = args[0];
+  } else {
+    const currentBranchRef = state.activeBranch ? state.branches[state.activeBranch] : null;
+    if (!currentBranchRef?.upstream) {
+      return {
+        nextState: state,
+        stdout: [],
+        stderr: [
+          `There is no tracking information for the current branch.`,
+          `Please specify which branch you want to merge with.`,
+          `See git-pull(1) for details.`,
+          ``,
+          `    git pull <remote> <branch>`,
+          ``,
+          `If you wish to set tracking information for this branch you can do so with:`,
+          ``,
+          `    git branch --set-upstream-to=<remote>/<branch> ${state.activeBranch || 'main'}`,
+        ],
+        exitCode: 1,
+      };
+    }
+    const [uRemote, ...uBranchParts] = currentBranchRef.upstream.split('/');
+    remoteName = uRemote;
+    branchName = uBranchParts.join('/');
+  }
+
+  const remote = state.remotes[remoteName];
+  if (!remote) {
+    return {
+      nextState: state,
+      stdout: [],
+      stderr: [
+        `fatal: '${remoteName}' does not appear to be a git repository`,
+        "fatal: Could not read from remote repository.",
+      ],
+      exitCode: 128,
+    };
+  }
+
+  // Phase A: Fetch
+  const fetchResult = handleGitFetch(state, {}, [remoteName]);
+  const fetchedState = fetchResult.nextState;
+  const remoteCommitId = fetchedState.remotes[remoteName]?.branches[branchName];
+
+  if (!remoteCommitId) {
+    return {
+      nextState: fetchedState,
+      stdout: fetchResult.stdout,
+      stderr: [`fatal: couldn't find remote ref ${branchName}`],
+      exitCode: 1,
+    };
+  }
+
+  // Phase B: Integration
+  const localCommitId = fetchedState.headCommitId;
+
+  // Case B1: Already up to date
+  if (localCommitId === remoteCommitId) {
+    return {
+      nextState: fetchedState,
+      stdout: [...fetchResult.stdout, 'Already up to date.'],
+      stderr: [],
+      exitCode: 0,
+    };
+  }
+
+  // Dirty check: reject merge integration (preserves fetched remote tracking ref)
+  if (dirtyCheck.isDirty) {
+    return {
+      nextState: fetchedState,
+      stdout: fetchResult.stdout,
+      stderr: [
+        'error: Your local changes to the following files would be overwritten by merge:',
+        ...dirtyCheck.dirtyPaths.map((p) => `\t${p}`),
+        'Please commit your changes or stash them before you merge.',
+        'Aborting',
+      ],
+      exitCode: 1,
+    };
+  }
+
+  // Case B2: Fast-Forward
+  if (!localCommitId || isAncestor(fetchedState.commits, localCommitId, remoteCommitId)) {
+    const targetCommit = fetchedState.commits[remoteCommitId];
+    const nextBranches = { ...fetchedState.branches };
+    if (fetchedState.activeBranch) {
+      nextBranches[fetchedState.activeBranch] = {
+        ...nextBranches[fetchedState.activeBranch],
+        commitId: remoteCommitId,
+      };
+    }
+
+    return {
+      nextState: {
+        ...fetchedState,
+        branches: nextBranches,
+        headCommitId: remoteCommitId,
+        index: { ...targetCommit.tree },
+        workingTree: { ...targetCommit.tree },
+      },
+      stdout: [
+        ...fetchResult.stdout,
+        `Updating ${localCommitId ? localCommitId.slice(0, 7) : '0000000'}..${remoteCommitId.slice(0, 7)}`,
+        'Fast-forward',
+      ],
+      stderr: [],
+      exitCode: 0,
+      explanation: {
+        title: `Pulled from '${remoteName}/${branchName}' (Fast-Forward)`,
+        description: `Advanced local '${fetchedState.activeBranch}' to ${remoteCommitId.slice(0, 7)} and updated working tree.`,
+        affectedStages: ['working', 'staging', 'local', 'remote'],
+      },
+    };
+  }
+
+  // Case B3/B4: 3-way merge or conflict
+  const mergeBaseId = findMergeBase(fetchedState.commits, localCommitId, remoteCommitId);
+  const baseCommit = mergeBaseId ? fetchedState.commits[mergeBaseId] : null;
+  const baseTree = baseCommit ? baseCommit.tree : {};
+  const currentCommit = fetchedState.commits[localCommitId];
+  const currentTree = currentCommit.tree;
+  const targetCommit = fetchedState.commits[remoteCommitId];
+  const targetTree = targetCommit.tree;
+
+  const allPaths = new Set([
+    ...Object.keys(baseTree),
+    ...Object.keys(currentTree),
+    ...Object.keys(targetTree),
+  ]);
+
+  const conflicts: string[] = [];
+  const mergedWorkingTree = { ...fetchedState.workingTree };
+  const mergedIndex = { ...fetchedState.index };
+
+  for (const p of allPaths) {
+    const baseVal = baseTree[p];
+    const currentVal = currentTree[p];
+    const targetVal = targetTree[p];
+
+    if (currentVal === targetVal) {
+      if (currentVal === undefined) {
+        delete mergedIndex[p];
+        delete mergedWorkingTree[p];
+      } else {
+        mergedIndex[p] = currentVal;
+        mergedWorkingTree[p] = currentVal;
+      }
+    } else if (currentVal === baseVal) {
+      if (targetVal === undefined) {
+        delete mergedIndex[p];
+        delete mergedWorkingTree[p];
+      } else {
+        mergedIndex[p] = targetVal;
+        mergedWorkingTree[p] = targetVal;
+      }
+    } else if (targetVal === baseVal) {
+      if (currentVal === undefined) {
+        delete mergedIndex[p];
+        delete mergedWorkingTree[p];
+      } else {
+        mergedIndex[p] = currentVal;
+        mergedWorkingTree[p] = currentVal;
+      }
+    } else {
+      conflicts.push(p);
+      const cContent = currentVal || '';
+      const tContent = targetVal || '';
+      mergedWorkingTree[p] = `<<<<<<< HEAD\n${cContent}=======\n${tContent}>>>>>>> ${remoteName}/${branchName}\n`;
+    }
+  }
+
+  if (conflicts.length > 0) {
+    const preMergeSnapshot: PreMergeSnapshot = {
+      workingTree: { ...state.workingTree },
+      index: { ...state.index },
+      headCommitId: state.headCommitId,
+      activeBranch: state.activeBranch,
+    };
+
+    const mergeConflictState: GitMergeConflictState = {
+      targetBranch: `${remoteName}/${branchName}`,
+      targetCommitId: remoteCommitId,
+      baseCommitId: mergeBaseId || '',
+      conflictingPaths: conflicts,
+      resolvedPaths: [],
+      preMergeSnapshot,
+    };
+
+    return {
+      nextState: {
+        ...fetchedState,
+        workingTree: mergedWorkingTree,
+        mergeState: mergeConflictState,
+      },
+      stdout: [
+        ...fetchResult.stdout,
+        ...conflicts.map((p) => `Auto-merging ${p}`),
+        ...conflicts.map((p) => `CONFLICT (content): Merge conflict in ${p}`),
+        'Automatic merge failed; fix conflicts and then commit the result.',
+      ],
+      stderr: [],
+      exitCode: 1,
+      explanation: {
+        title: 'Merge Conflict Triggered on Pull',
+        description: `Incoming changes from '${remoteName}/${branchName}' conflicted with local edits. Conflict markers were placed in working tree.`,
+        affectedStages: ['working', 'remote'],
+      },
+    };
+  }
+
+  // Clean 3-way merge commit
+  const timestamp = Date.now();
+  const parentIds = [localCommitId, remoteCommitId];
+  const mergeMessage = `Merge branch '${branchName}' of ${remote.url}`;
+  const mergeCommitId = createDeterministicCommitId(parentIds, mergeMessage, mergedIndex, SIMULATOR_AUTHOR, timestamp);
+
+  const mergeCommit: GitCommitNode = {
+    id: mergeCommitId,
+    parentIds,
+    message: mergeMessage,
+    author: SIMULATOR_AUTHOR,
+    timestamp,
+    tree: { ...mergedIndex },
+  };
+
+  const nextBranches = { ...fetchedState.branches };
+  if (fetchedState.activeBranch) {
+    nextBranches[fetchedState.activeBranch] = {
+      ...nextBranches[fetchedState.activeBranch],
+      commitId: mergeCommitId,
+    };
+  }
+
+  return {
+    nextState: {
+      ...fetchedState,
+      commits: { ...fetchedState.commits, [mergeCommitId]: mergeCommit },
+      branches: nextBranches,
+      headCommitId: mergeCommitId,
+      index: mergedIndex,
+      workingTree: mergedWorkingTree,
+    },
+    stdout: [
+      ...fetchResult.stdout,
+      `Merge made by the 'ort' strategy.`,
+    ],
+    stderr: [],
+    exitCode: 0,
+    explanation: {
+      title: `3-Way Merge Pull Completed`,
+      description: `Integrated '${remoteName}/${branchName}' into '${fetchedState.activeBranch}'. Generated 2-parent merge commit [${mergeCommitId.slice(0, 7)}].`,
+      affectedStages: ['working', 'staging', 'local', 'remote'],
+    },
+  };
+}
+
+function handleGitClone(
+  state: GitRepoState,
+  args: string[]
+): CommandResult {
+  if (state.isInitialized) {
+    const url = args[0] || '';
+    const targetDir = url.split('/').pop()?.replace('.git', '') || 'project';
+    return {
+      nextState: state,
+      stdout: [],
+      stderr: [
+        `fatal: destination path '${targetDir}' already exists and is not an empty directory.`,
+        'hint: Clone can only be executed in an empty/uninitialized workspace in this sandbox.',
+      ],
+      exitCode: 128,
+    };
+  }
+
+  if (args.length === 0) {
+    return {
+      nextState: state,
+      stdout: [],
+      stderr: ['fatal: You must specify a repository to clone.'],
+      exitCode: 1,
+    };
+  }
+
+  const url = args[0];
+  const fixture = getRemoteFixture(url);
+  if (!fixture) {
+    return {
+      nextState: state,
+      stdout: [],
+      stderr: [
+        `fatal: repository '${url}' not found`,
+        `hint: Supported demo fixtures include:`,
+        `  - https://github.com/student/git-practice.git`,
+        `  - https://github.com/example/project.git`,
+        `  - https://github.com/example/upstream-repo.git`,
+      ],
+      exitCode: 128,
+    };
+  }
+
+  const defaultBranch = fixture.defaultBranch || 'main';
+  const defaultCommitId = fixture.branches[defaultBranch] || Object.keys(fixture.commits)[0] || '';
+  const defaultCommit = fixture.commits[defaultCommitId];
+  const defaultTree = defaultCommit ? { ...defaultCommit.tree } : {};
+
+  const nextState: GitRepoState = {
+    isInitialized: true,
+    commits: { ...fixture.commits },
+    remotes: {
+      origin: {
+        name: 'origin',
+        url: fixture.url,
+        commits: { ...fixture.commits },
+        branches: { ...fixture.branches },
+      },
+    },
+    branches: {
+      [defaultBranch]: {
+        name: defaultBranch,
+        commitId: defaultCommitId,
+        upstream: `origin/${defaultBranch}`,
+      },
+    },
+    activeBranch: defaultBranch,
+    headCommitId: defaultCommitId,
+    index: { ...defaultTree },
+    workingTree: { ...defaultTree },
+    stash: [],
+    mergeState: null,
+  };
+
+  const commitCount = Object.keys(fixture.commits).length;
+  const projectName = url.split('/').pop()?.replace(/\.git$/, '') || 'project';
+
+  return {
+    nextState,
+    stdout: [
+      `Cloning into '${projectName}'...`,
+      `remote: Enumerating objects: ${commitCount}, done.`,
+      `remote: Total ${commitCount} (delta 0), reused ${commitCount} (delta 0)`,
+      `Receiving objects: 100% (${commitCount}/${commitCount}), done.`,
+    ],
+    stderr: [],
+    exitCode: 0,
+    explanation: {
+      title: `Cloned Repository from '${url}'`,
+      description: `Created clean local clone. Checked out '${defaultBranch}' set up to track 'origin/${defaultBranch}'.`,
+      affectedStages: ['working', 'staging', 'local', 'remote'],
+    },
+  };
+}
+
+function handleGitShow(
+  state: GitRepoState,
+  _flags: Record<string, string | boolean>,
+  args: string[]
+): CommandResult {
+  const targetSpec = args[0] || 'HEAD';
+  let targetCommitId: string | null = null;
+
+  if (targetSpec === 'HEAD') {
+    targetCommitId = state.headCommitId;
+  } else if (state.branches[targetSpec]) {
+    targetCommitId = state.branches[targetSpec].commitId;
+  } else if (targetSpec.startsWith('HEAD~') || targetSpec.startsWith('HEAD^')) {
+    let count = 1;
+    if (targetSpec.startsWith('HEAD~')) {
+      const numStr = targetSpec.slice(5);
+      count = numStr ? parseInt(numStr, 10) : 1;
+    }
+    let curr = state.headCommitId;
+    for (let i = 0; i < count; i++) {
+      if (!curr || !state.commits[curr] || state.commits[curr].parentIds.length === 0) {
+        curr = null;
+        break;
+      }
+      curr = state.commits[curr].parentIds[0];
+    }
+    targetCommitId = curr;
+  } else {
+    const fullMatch = Object.keys(state.commits).find(
+      (cId) => cId === targetSpec || cId.startsWith(targetSpec)
+    );
+    if (fullMatch) {
+      targetCommitId = fullMatch;
+    }
+  }
+
+  if (!targetCommitId || !state.commits[targetCommitId]) {
+    return {
+      nextState: state,
+      stdout: [],
+      stderr: [`fatal: bad object ${targetSpec}`],
+      exitCode: 128,
+    };
+  }
+
+  const commit = state.commits[targetCommitId];
+  const dateStr = new Date(commit.timestamp).toUTCString();
+  const lines: string[] = [
+    `commit ${commit.id}`,
+  ];
+  if (commit.parentIds.length > 1) {
+    lines.push(`Merge: ${commit.parentIds.map((p) => p.slice(0, 7)).join(' ')}`);
+  }
+  lines.push(`Author: ${commit.author}`);
+  lines.push(`Date:   ${dateStr}`);
+  lines.push('');
+  lines.push(`    ${commit.message}`);
+  lines.push('');
+
+  // Unified diff formatting
+  if (commit.parentIds.length === 0) {
+    // Root commit: all files added
+    for (const [p, content] of Object.entries(commit.tree).sort(([a], [b]) => a.localeCompare(b))) {
+      lines.push(`diff --git a/${p} b/${p}`);
+      lines.push(`new file mode 100644`);
+      lines.push(`--- /dev/null`);
+      lines.push(`+++ b/${p}`);
+      const contentLines = content.split('\n');
+      if (contentLines.length > 0 && contentLines[contentLines.length - 1] === '') {
+        contentLines.pop();
+      }
+      lines.push(`@@ -0,0 +1,${contentLines.length} @@`);
+      for (const cl of contentLines) {
+        lines.push(`+${cl}`);
+      }
+    }
+  } else if (commit.parentIds.length === 1) {
+    const parent = state.commits[commit.parentIds[0]];
+    const parentTree = parent ? parent.tree : {};
+    const allPaths = Array.from(new Set([...Object.keys(parentTree), ...Object.keys(commit.tree)])).sort();
+
+    for (const p of allPaths) {
+      const oldVal = parentTree[p];
+      const newVal = commit.tree[p];
+
+      if (oldVal === undefined && newVal !== undefined) {
+        // Added
+        lines.push(`diff --git a/${p} b/${p}`);
+        lines.push(`new file mode 100644`);
+        lines.push(`--- /dev/null`);
+        lines.push(`+++ b/${p}`);
+        const contentLines = newVal.split('\n');
+        if (contentLines.length > 0 && contentLines[contentLines.length - 1] === '') contentLines.pop();
+        lines.push(`@@ -0,0 +1,${contentLines.length} @@`);
+        for (const cl of contentLines) lines.push(`+${cl}`);
+      } else if (oldVal !== undefined && newVal === undefined) {
+        // Deleted
+        lines.push(`diff --git a/${p} b/${p}`);
+        lines.push(`deleted file mode 100644`);
+        lines.push(`--- a/${p}`);
+        lines.push(`+++ /dev/null`);
+        const contentLines = oldVal.split('\n');
+        if (contentLines.length > 0 && contentLines[contentLines.length - 1] === '') contentLines.pop();
+        lines.push(`@@ -1,${contentLines.length} +0,0 @@`);
+        for (const cl of contentLines) lines.push(`-${cl}`);
+      } else if (oldVal !== newVal) {
+        // Modified
+        lines.push(`diff --git a/${p} b/${p}`);
+        lines.push(`--- a/${p}`);
+        lines.push(`+++ b/${p}`);
+        const oldLines = oldVal.split('\n');
+        if (oldLines.length > 0 && oldLines[oldLines.length - 1] === '') oldLines.pop();
+        const newLines = newVal.split('\n');
+        if (newLines.length > 0 && newLines[newLines.length - 1] === '') newLines.pop();
+        lines.push(`@@ -1,${oldLines.length} +1,${newLines.length} @@`);
+        for (const ol of oldLines) lines.push(`-${ol}`);
+        for (const nl of newLines) lines.push(`+${nl}`);
+      }
+    }
+  } else {
+    // Merge commit
+    lines.push(`diff --cc merged files`);
+  }
+
+  return {
+    nextState: state,
+    stdout: lines,
+    stderr: [],
+    exitCode: 0,
   };
 }

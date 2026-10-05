@@ -27,6 +27,13 @@ export interface GitRemoteRef {
   branches: Record<string, string>;       // branch name -> commitId
 }
 
+export interface SimulatedRemoteRepo {
+  url: string;
+  defaultBranch: string;
+  branches: Record<string, string>;       // branchName -> commitId
+  commits: Record<string, GitCommitNode>; // commitId -> GitCommitNode
+}
+
 export interface GitStashEntry {
   id: string;                      // "stash@{0}", "stash@{1}", ...
   message: string;                 // e.g. "WIP on main: 14c7b7e initial commit"

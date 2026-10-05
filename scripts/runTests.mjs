@@ -11,6 +11,7 @@ const tests = [
   'gitMerge',
   'gitAdvancedUndo',
   'scenarioValidation',
+  'gitRemoteSync',
 ];
 
 if (!fs.existsSync('dist-tests')) {

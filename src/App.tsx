@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import { Layout } from './app/components/layout/Layout';
 import { NavigationTab } from './types';
 import { DashboardView } from './app/features/dashboard/DashboardView';
@@ -8,8 +8,18 @@ import { PracticeView } from './app/features/practice/PracticeView';
 import { QuizView } from './app/features/quiz/QuizView';
 import { ProgressView } from './app/features/progress/ProgressView';
 import { CheatSheetView } from './app/features/cheat-sheet/CheatSheetView';
-import { LessonView } from './app/features/lesson/LessonView';
-import { getLessonById, FOUNDATIONAL_LESSONS } from './data/lessons';
+
+const LessonView = lazy(() =>
+  import('./app/features/lesson/LessonView').then((m) => ({ default: m.LessonView }))
+);
+import { 
+  getLessonById, 
+  loadLesson, 
+  isLessonAvailable, 
+  FOUNDATIONAL_LESSONS, 
+  ALL_LESSON_METADATA 
+} from './data/lessons';
+import { Lesson } from './types/lesson';
 import { useProgress } from './hooks/useProgress';
 
 export function App() {
@@ -25,12 +35,42 @@ export function App() {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       const paramLesson = params.get('lesson');
-      if (paramLesson && getLessonById(paramLesson)) {
+      if (paramLesson && isLessonAvailable(paramLesson)) {
         return paramLesson;
       }
     }
     return null;
   });
+
+  const [activeLesson, setActiveLesson] = useState<Lesson | null>(() => {
+    return activeLessonId ? getLessonById(activeLessonId) || null : null;
+  });
+  const [isLoadingLesson, setIsLoadingLesson] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!activeLessonId) {
+      setActiveLesson(null);
+      setIsLoadingLesson(false);
+      return;
+    }
+    const sync = getLessonById(activeLessonId);
+    if (sync) {
+      setActiveLesson(sync);
+      setIsLoadingLesson(false);
+      return;
+    }
+    setIsLoadingLesson(true);
+    let isCancelled = false;
+    loadLesson(activeLessonId).then((l) => {
+      if (!isCancelled) {
+        setActiveLesson(l || null);
+        setIsLoadingLesson(false);
+      }
+    });
+    return () => {
+      isCancelled = true;
+    };
+  }, [activeLessonId]);
 
   const prevActiveLessonIdRef = useRef<string | null>(activeLessonId);
 
@@ -57,7 +97,7 @@ export function App() {
     const handlePopState = () => {
       const params = new URLSearchParams(window.location.search);
       const paramLesson = params.get('lesson');
-      if (paramLesson && getLessonById(paramLesson)) {
+      if (paramLesson && isLessonAvailable(paramLesson)) {
         setActiveLessonId(paramLesson);
       } else {
         setActiveLessonId(null);
@@ -140,25 +180,23 @@ export function App() {
     setActiveTab('learn');
   };
 
-  const activeLesson = activeLessonId ? getLessonById(activeLessonId) : null;
-
-  // Determine next lesson for sequential navigation
-  const currentLessonIndex = activeLesson
-    ? FOUNDATIONAL_LESSONS.findIndex((l) => l.id === activeLesson.id)
+  // Determine next lesson for sequential navigation across all modules
+  const currentLessonIndex = activeLessonId
+    ? ALL_LESSON_METADATA.findIndex((m) => m.id === activeLessonId)
     : -1;
-  const nextLesson =
-    currentLessonIndex !== -1 && currentLessonIndex < FOUNDATIONAL_LESSONS.length - 1
-      ? FOUNDATIONAL_LESSONS[currentLessonIndex + 1]
+  const nextLessonMeta =
+    currentLessonIndex !== -1 && currentLessonIndex < ALL_LESSON_METADATA.length - 1
+      ? ALL_LESSON_METADATA[currentLessonIndex + 1]
       : null;
 
   const handleNextLesson = () => {
-    if (nextLesson) {
-      setActiveLessonId(nextLesson.id);
+    if (nextLessonMeta) {
+      setActiveLessonId(nextLessonMeta.id);
     }
   };
 
-  const completedModulesCount = FOUNDATIONAL_LESSONS.filter(
-    (l) => progress.lessonProgress[l.id]?.completed
+  const completedModulesCount = ALL_LESSON_METADATA.filter(
+    (m) => progress.lessonProgress[m.id]?.completed
   ).length;
 
   const [selectedScenarioId, setSelectedScenarioId] = useState<number | null>(null);
@@ -168,18 +206,40 @@ export function App() {
     setActiveTab('playground');
   };
 
+  if (isLoadingLesson) {
+    return (
+      <div className="min-h-screen bg-bg-dark text-text-primary flex items-center justify-center p-6" role="status" aria-live="polite">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 border-2 border-brand-primary border-t-transparent rounded-full animate-spin" />
+          <p className="text-sm text-text-secondary">Loading interactive lesson...</p>
+        </div>
+      </div>
+    );
+  }
+
   if (activeLesson) {
     return (
-      <LessonView
-        lesson={activeLesson}
-        onBack={() => setActiveLessonId(null)}
-        onNavigateToDashboard={() => {
-          setActiveLessonId(null);
-          setActiveTab('dashboard');
-        }}
-        onNextLesson={nextLesson ? handleNextLesson : undefined}
-        hasNextLesson={Boolean(nextLesson)}
-      />
+      <Suspense
+        fallback={
+          <div className="min-h-screen bg-bg-dark text-text-primary flex items-center justify-center p-6" role="status" aria-live="polite">
+            <div className="flex flex-col items-center gap-3">
+              <div className="w-8 h-8 border-2 border-brand-primary border-t-transparent rounded-full animate-spin" />
+              <p className="text-sm text-text-secondary">Loading lesson view...</p>
+            </div>
+          </div>
+        }
+      >
+        <LessonView
+          lesson={activeLesson}
+          onBack={() => setActiveLessonId(null)}
+          onNavigateToDashboard={() => {
+            setActiveLessonId(null);
+            setActiveTab('dashboard');
+          }}
+          onNextLesson={nextLessonMeta ? handleNextLesson : undefined}
+          hasNextLesson={Boolean(nextLessonMeta)}
+        />
+      </Suspense>
     );
   }
 

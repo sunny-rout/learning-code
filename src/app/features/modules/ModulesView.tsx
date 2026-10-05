@@ -14,7 +14,7 @@ import {
 import { MODULES } from '@/data/modules';
 import { ModuleItem, NavigationTab } from '@/types';
 import { useProgress } from '@/hooks/useProgress';
-import { getLessonForModule } from '@/data/lessons';
+import { getLessonForModule, getLessonMetadataForModule } from '@/data/lessons';
 
 interface ModulesViewProps {
   selectedModuleId?: string;
@@ -117,8 +117,10 @@ export const ModulesView: React.FC<ModulesViewProps> = ({
         <div className="lg:col-span-2 space-y-3">
           {filteredModules.map((module) => {
             const isSelected = activeModule.id === module.id;
+            const lessonMeta = getLessonMetadataForModule(module.id);
             const lesson = getLessonForModule(module.id);
-            const lessonProg = lesson ? getLessonProgress(lesson.id) : null;
+            const targetLessonId = lesson?.id || lessonMeta?.id;
+            const lessonProg = targetLessonId ? getLessonProgress(targetLessonId) : null;
             const isCompleted = lessonProg ? lessonProg.completed : false;
             const isInProgress = lessonProg
               ? !isCompleted && (lessonProg.completedStepIds.length > 0 || Boolean(lessonProg.currentStepId))
@@ -218,8 +220,10 @@ export const ModulesView: React.FC<ModulesViewProps> = ({
         {/* Selected Module Detail Panel */}
         <div className="lg:col-span-1">
           {(() => {
+            const activeLessonMeta = getLessonMetadataForModule(activeModule.id);
             const activeLesson = getLessonForModule(activeModule.id);
-            const activeLessonProg = activeLesson ? getLessonProgress(activeLesson.id) : null;
+            const targetLessonId = activeLesson?.id || activeLessonMeta?.id;
+            const activeLessonProg = targetLessonId ? getLessonProgress(targetLessonId) : null;
             const isCompleted = activeLessonProg ? activeLessonProg.completed : false;
             const isInProgress = activeLessonProg
               ? !isCompleted && (activeLessonProg.completedStepIds.length > 0 || Boolean(activeLessonProg.currentStepId))
@@ -314,10 +318,10 @@ export const ModulesView: React.FC<ModulesViewProps> = ({
                 </div>
 
                 {/* Primary Action Button */}
-                {activeLesson ? (
+                {targetLessonId ? (
                   <button 
                     type="button"
-                    onClick={() => onStartLesson && onStartLesson(activeLesson.id)}
+                    onClick={() => onStartLesson && onStartLesson(targetLessonId)}
                     className={`w-full py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary ${
                       isCompleted
                         ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-glow-green'

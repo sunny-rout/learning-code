@@ -87,10 +87,19 @@ export const CommitGraphView: React.FC<CommitGraphViewProps> = ({ repoState }) =
 
     laneMap.set(commit.id, lane);
 
-    // Find branches pointing to this commit
-    const pointingBranches = Object.entries(repoState.branches)
+    // Find branches pointing to this commit (local + remote tracking)
+    const localBranches = Object.entries(repoState.branches)
       .filter(([_, bRef]) => bRef.commitId === commit.id)
       .map(([name]) => name);
+
+    const remoteBranches = Object.entries(repoState.remotes || {})
+      .flatMap(([remoteName, remoteObj]) =>
+        Object.entries(remoteObj.branches || {})
+          .filter(([_, cId]) => cId === commit.id)
+          .map(([bName]) => `${remoteName}/${bName}`)
+      );
+
+    const pointingBranches = [...localBranches, ...remoteBranches];
 
     const isHead = repoState.headCommitId === commit.id;
 
@@ -226,31 +235,35 @@ export const CommitGraphView: React.FC<CommitGraphViewProps> = ({ repoState }) =
                 </text>
 
                 {/* Branch Badges */}
-                {node.branches.map((bName, bIdx) => (
-                  <g key={bName} transform={`translate(${node.x + 18 + bIdx * 56}, ${node.y + 8})`}>
-                    <rect
-                      x="0"
-                      y="-10"
-                      width={bName.length * 6.5 + 12}
-                      height="15"
-                      rx="4"
-                      fill={bName === repoState.activeBranch ? '#047857' : '#312E81'}
-                      stroke={bName === repoState.activeBranch ? '#10B981' : '#6366F1'}
-                      strokeWidth="1"
-                    />
-                    <text
-                      x="6"
-                      y="1"
-                      className="font-mono text-[9px] font-semibold fill-white"
-                    >
-                      {bName}
-                    </text>
-                  </g>
-                ))}
+                {node.branches.map((bName, bIdx) => {
+                  const isRemote = bName.includes('/');
+                  const isActive = bName === repoState.activeBranch;
+                  return (
+                    <g key={bName} transform={`translate(${node.x + 18 + bIdx * 64}, ${node.y + 8})`}>
+                      <rect
+                        x="0"
+                        y="-10"
+                        width={bName.length * 6.5 + 12}
+                        height="15"
+                        rx="4"
+                        fill={isActive ? '#047857' : isRemote ? '#7C2D12' : '#312E81'}
+                        stroke={isActive ? '#10B981' : isRemote ? '#F97316' : '#6366F1'}
+                        strokeWidth="1"
+                      />
+                      <text
+                        x="6"
+                        y="1"
+                        className="font-mono text-[9px] font-semibold fill-white"
+                      >
+                        {bName}
+                      </text>
+                    </g>
+                  );
+                })}
 
                 {/* HEAD Pill if pointed directly */}
                 {node.isHead && (
-                  <g transform={`translate(${node.x + 18 + node.branches.length * 56}, ${node.y + 8})`}>
+                  <g transform={`translate(${node.x + 18 + node.branches.length * 64}, ${node.y + 8})`}>
                     <rect
                       x="0"
                       y="-10"
