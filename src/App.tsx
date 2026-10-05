@@ -161,6 +161,13 @@ export function App() {
     (l) => progress.lessonProgress[l.id]?.completed
   ).length;
 
+  const [selectedScenarioId, setSelectedScenarioId] = useState<number | null>(null);
+
+  const handleLaunchScenario = (scenarioId: number) => {
+    setSelectedScenarioId(scenarioId);
+    setActiveTab('playground');
+  };
+
   if (activeLesson) {
     return (
       <LessonView
@@ -200,8 +207,18 @@ export function App() {
           onStartLesson={handleStartLesson}
         />
       )}
-      {activeTab === 'playground' && <PlaygroundView />}
-      {activeTab === 'practice' && <PracticeView onNavigate={setActiveTab} />}
+      {activeTab === 'playground' && (
+        <PlaygroundView
+          initialScenarioId={selectedScenarioId}
+          onExitScenario={() => setSelectedScenarioId(null)}
+        />
+      )}
+      {activeTab === 'practice' && (
+        <PracticeView
+          onNavigate={setActiveTab}
+          onLaunchScenario={handleLaunchScenario}
+        />
+      )}
       {activeTab === 'quiz' && <QuizView onNavigate={setActiveTab} />}
       {activeTab === 'progress' && <ProgressView onNavigate={setActiveTab} />}
       {activeTab === 'cheat-sheet' && <CheatSheetView />}
