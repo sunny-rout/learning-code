@@ -177,6 +177,59 @@ export const PRACTICE_SCENARIOS: Record<number, ScenarioDefinition> = {
       return !state.mergeState;
     },
   },
+
+  7: {
+    id: 7,
+    title: 'Exercise 7: Production Workflow, Tagging & Push',
+    subtitle: 'Feature Lifecycle, Annotated Release Tagging & Remote Tag Push',
+    description: 'Implement a feature on a dedicated branch, merge it into main, clean up the branch, create annotated release tag v1.0.0, and publish all tags to origin.',
+    initialState: createPracticeExerciseState(7),
+    targetCommands: [
+      'git switch -c feature/login',
+      'touch login.js',
+      'git add login.js',
+      'git commit -m "Add login module"',
+      'git switch main',
+      'git merge feature/login',
+      'git branch -d feature/login',
+      'git tag -a v1.0.0 -m "Release version 1.0.0"',
+      'git push origin --tags',
+    ],
+    steps: [
+      'Create and switch to `feature/login` using `git switch -c feature/login`',
+      'Create `login.js` using `touch login.js`, stage it with `git add login.js`, and commit with `git commit -m "Add login module"`',
+      'Switch back to `main` using `git switch main` and merge with `git merge feature/login`',
+      'Delete the merged feature branch with `git branch -d feature/login`',
+      'Create annotated tag `v1.0.0` with `git tag -a v1.0.0 -m "Release version 1.0.0"`',
+      'Push your tags to GitHub with `git push origin --tags`',
+    ],
+    isCompleted: (state: GitRepoState): boolean => {
+      // 1. Must be on main
+      if (state.activeBranch !== 'main' || !state.headCommitId) return false;
+      const headCommit = state.commits[state.headCommitId];
+      if (!headCommit) return false;
+
+      // 2. Feature commit exists and main contains the merge
+      if (!Object.prototype.hasOwnProperty.call(headCommit.tree, 'login.js')) return false;
+
+      // 3. Feature branch deleted
+      if (state.branches['feature/login']) return false;
+
+      // 4. Annotated tag v1.0.0 points to HEAD
+      const localTag = state.tags?.['v1.0.0'];
+      if (!localTag || localTag.type !== 'annotated' || localTag.commitId !== state.headCommitId) {
+        return false;
+      }
+
+      // 5. Remote v1.0.0 tag exists and points to the same commit
+      const origin = state.remotes['origin'];
+      if (!origin || !origin.tags || origin.tags['v1.0.0'] !== state.headCommitId) {
+        return false;
+      }
+
+      return true;
+    },
+  },
 };
 
 export function getScenarioById(id: number): ScenarioDefinition | undefined {

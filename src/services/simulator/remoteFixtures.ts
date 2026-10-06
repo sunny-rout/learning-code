@@ -63,12 +63,14 @@ function createInitialFixtures(): Record<string, SimulatedRemoteRepo> {
       defaultBranch: 'main',
       branches: { main: p1Id },
       commits: { [p1Id]: p1Commit },
+      tags: {},
     },
     [projectUrl]: {
       url: projectUrl,
       defaultBranch: 'main',
       branches: { main: projC1Id },
       commits: { [projC1Id]: projC1 },
+      tags: {},
     },
     [upstreamUrl]: {
       url: upstreamUrl,
@@ -78,6 +80,7 @@ function createInitialFixtures(): Record<string, SimulatedRemoteRepo> {
         [u1Id]: u1,
         [u2Id]: u2,
       },
+      tags: {},
     },
   };
 }
@@ -100,6 +103,7 @@ export function getOrCreateRemoteFixture(url: string): SimulatedRemoteRepo {
       defaultBranch: 'main',
       branches: {},
       commits: {},
+      tags: {},
     };
   }
   return remoteRegistry[url];

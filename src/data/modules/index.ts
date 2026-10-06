@@ -155,10 +155,10 @@ export const MODULES: ModuleItem[] = [
     id: 'module-16',
     number: 16,
     title: 'Troubleshooting & Best Practices',
-    description: 'Diagnose common beginner stumbling blocks, handle non-fast-forward push rejections with pull --rebase, and avoid force pushes.',
+    description: 'Diagnose common beginner stumbling blocks, handle push rejections safely, understand history rewriting risks, and avoid force pushes.',
     category: 'History & Recovery',
     durationMinutes: 18,
-    commands: ['git pull --rebase', 'git rebase --continue', 'git rebase --abort'],
+    commands: ['git status', 'git log', 'git switch', 'git checkout'],
     pdfSection: 14,
   },
   {

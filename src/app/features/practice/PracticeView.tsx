@@ -11,7 +11,7 @@ interface Exercise {
   id: number;
   title: string;
   pdfRef: string;
-  difficulty: 'Beginner' | 'Intermediate';
+  difficulty: 'Beginner' | 'Intermediate' | 'Advanced';
   description: string;
   steps: string[];
   recommendedCommands: string[];
@@ -113,6 +113,27 @@ export const PracticeView: React.FC<PracticeViewProps> = ({ onNavigate, onLaunch
         'Temporarily save unfinished work with git stash and restore with git stash pop',
       ],
       recommendedCommands: ['git restore <file>', 'git restore --staged <file>', 'git stash', 'git stash pop'],
+      completed: false,
+    },
+    {
+      id: 7,
+      title: 'Exercise 7: Production Workflow, Tagging & Push',
+      pdfRef: 'PDF Section 15 & 16',
+      difficulty: 'Advanced',
+      description: 'Implement a feature on a dedicated branch, merge to main, delete feature branch, tag release v1.0.0, and push all tags to origin.',
+      steps: [
+        'Create and switch to feature/login, add login.js, and commit',
+        'Switch back to main, merge feature/login, and delete the feature branch',
+        'Create annotated release tag v1.0.0 and push all tags to origin using git push origin --tags',
+      ],
+      recommendedCommands: [
+        'git switch -c feature/login',
+        'git commit -m "Add login module"',
+        'git merge feature/login',
+        'git branch -d feature/login',
+        'git tag -a v1.0.0 -m "Release version 1.0.0"',
+        'git push origin --tags',
+      ],
       completed: false,
     },
   ]);

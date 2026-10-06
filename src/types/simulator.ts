@@ -25,6 +25,7 @@ export interface GitRemoteRef {
   url: string;
   commits: Record<string, GitCommitNode>; // Remote object store
   branches: Record<string, string>;       // branch name -> commitId
+  tags?: Record<string, string>;           // tag name -> commitId
 }
 
 export interface SimulatedRemoteRepo {
@@ -32,6 +33,24 @@ export interface SimulatedRemoteRepo {
   defaultBranch: string;
   branches: Record<string, string>;       // branchName -> commitId
   commits: Record<string, GitCommitNode>; // commitId -> GitCommitNode
+  tags?: Record<string, string>;          // tag name -> commitId
+}
+
+export interface GitTagRef {
+  name: string;
+  commitId: string;
+  type: 'lightweight' | 'annotated';
+  message?: string;
+  tagger?: string;
+  timestamp?: number;
+}
+
+export interface GitReflogEntry {
+  id: string;                      // e.g. "HEAD@{0}"
+  commitId: string;
+  action: string;                  // "commit", "checkout", "reset", "merge", "clone", "pull"
+  message: string;
+  timestamp: number;
 }
 
 export interface GitStashEntry {
@@ -71,6 +90,8 @@ export interface GitRepoState {
   remotes: Record<string, GitRemoteRef>; // remoteName -> remote ref
   stash: GitStashEntry[];              // LIFO stash stack
   mergeState: GitMergeConflictState | null; // Active merge conflict state or null
+  tags: Record<string, GitTagRef>;     // tagName -> GitTagRef
+  reflog: GitReflogEntry[];            // Newest-first reflog entries
 }
 
 export interface StateChangeSummary {

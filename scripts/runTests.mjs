@@ -12,6 +12,7 @@ const tests = [
   'gitAdvancedUndo',
   'scenarioValidation',
   'gitRemoteSync',
+  'gitAdvancedWorkflow',
 ];
 
 if (!fs.existsSync('dist-tests')) {

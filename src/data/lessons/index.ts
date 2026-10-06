@@ -29,6 +29,11 @@ export const ALL_LESSON_METADATA: LessonMeta[] = [
   { id: 'lesson-10', moduleId: 'module-10', number: 10, title: 'Comparing Changes', subtitle: 'Understanding Unified Diffs, Inspecting Workspaces, and Exploring Commit Details', pdfSection: 5, estimatedMinutes: 18 },
   { id: 'lesson-11', moduleId: 'module-11', number: 11, title: 'Undoing Changes Safely', subtitle: 'Mastering git restore, git revert, and git reset (--soft, --mixed, --hard)', pdfSection: 10, estimatedMinutes: 22 },
   { id: 'lesson-12', moduleId: 'module-12', number: 12, title: 'Stashing Changes', subtitle: 'Temporarily Shelving Work-in-Progress, Managing the Stash Stack, and Safe Restoration', pdfSection: 11, estimatedMinutes: 16 },
+  { id: 'lesson-13', moduleId: 'module-13', number: 13, title: 'Git Ignore & File Management', subtitle: 'Writing .gitignore Rules, Untracking Tracked Files, and Renaming with git mv', pdfSection: 11, estimatedMinutes: 14 },
+  { id: 'lesson-14', moduleId: 'module-14', number: 14, title: 'Tags and Git Aliases', subtitle: 'Marking Release Milestones, Managing Annotated Tags, and Configuring Workflow Aliases', pdfSection: 11, estimatedMinutes: 12 },
+  { id: 'lesson-15', moduleId: 'module-15', number: 15, title: 'Complete Practical Workflow', subtitle: 'The Real-World 10-Step Feature Lifecycle: From Branch Creation to Pull Request, Merge, and Cleanup', pdfSection: 13, estimatedMinutes: 20 },
+  { id: 'lesson-16', moduleId: 'module-16', number: 16, title: 'Troubleshooting & Best Practices', subtitle: 'Diagnosing Common Errors, Avoiding Destructive Force Pushes, and History Safety Principles', pdfSection: 14, estimatedMinutes: 18 },
+  { id: 'lesson-17', moduleId: 'module-17', number: 17, title: 'Advanced Concepts: Reflog & Clean', subtitle: 'Recovering Lost Commits with git reflog and Safely Pruning Workspaces with git clean', pdfSection: 12, estimatedMinutes: 20 },
 ];
 
 export const FOUNDATIONAL_LESSONS: Lesson[] = [
@@ -58,7 +63,7 @@ const STATIC_LESSONS_BY_MODULE_ID: Record<string, Lesson> = {
   'module-09': LESSON_09,
 };
 
-// Dynamic loaders for Phase 5 lessons (Modules 05, 06, 08, 10, 11, 12)
+// Dynamic loaders for Phase 5 & 6 lessons (Modules 05, 06, 08, 10, 11, 12, 13, 14, 15, 16, 17)
 export const DYNAMIC_LESSONS: Record<string, () => Promise<{ [key: string]: any }>> = {
   'lesson-05': () => import('./lesson-05'),
   'lesson-06': () => import('./lesson-06'),
@@ -66,6 +71,11 @@ export const DYNAMIC_LESSONS: Record<string, () => Promise<{ [key: string]: any 
   'lesson-10': () => import('./lesson-10'),
   'lesson-11': () => import('./lesson-11'),
   'lesson-12': () => import('./lesson-12'),
+  'lesson-13': () => import('./lesson-13'),
+  'lesson-14': () => import('./lesson-14'),
+  'lesson-15': () => import('./lesson-15'),
+  'lesson-16': () => import('./lesson-16'),
+  'lesson-17': () => import('./lesson-17'),
 };
 
 const DYNAMIC_CACHE: Record<string, Lesson> = {};

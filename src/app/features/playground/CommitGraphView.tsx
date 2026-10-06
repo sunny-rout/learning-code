@@ -12,6 +12,7 @@ interface RenderNode {
   y: number;
   lane: number;
   branches: string[];
+  tags: string[];
   isHead: boolean;
 }
 
@@ -101,6 +102,10 @@ export const CommitGraphView: React.FC<CommitGraphViewProps> = ({ repoState }) =
 
     const pointingBranches = [...localBranches, ...remoteBranches];
 
+    const pointingTags = Object.entries(repoState.tags || {})
+      .filter(([_, tRef]) => tRef.commitId === commit.id)
+      .map(([name]) => name);
+
     const isHead = repoState.headCommitId === commit.id;
 
     const renderNode: RenderNode = {
@@ -109,6 +114,7 @@ export const CommitGraphView: React.FC<CommitGraphViewProps> = ({ repoState }) =
       y: MARGIN_TOP + idx * ROW_HEIGHT,
       lane,
       branches: pointingBranches,
+      tags: pointingTags,
       isHead,
     };
 
@@ -261,9 +267,39 @@ export const CommitGraphView: React.FC<CommitGraphViewProps> = ({ repoState }) =
                   );
                 })}
 
+                {/* Tag Badges */}
+                {node.tags.map((tName, tIdx) => {
+                  const offset = node.branches.length * 64 + tIdx * 56;
+                  return (
+                    <g key={tName} transform={`translate(${node.x + 18 + offset}, ${node.y + 8})`}>
+                      <rect
+                        x="0"
+                        y="-10"
+                        width={tName.length * 6.5 + 14}
+                        height="15"
+                        rx="4"
+                        fill="#78350F"
+                        stroke="#F59E0B"
+                        strokeWidth="1"
+                      />
+                      <text
+                        x="5"
+                        y="1"
+                        className="font-mono text-[9px] font-bold fill-amber-200"
+                      >
+                        🏷 {tName}
+                      </text>
+                    </g>
+                  );
+                })}
+
                 {/* HEAD Pill if pointed directly */}
                 {node.isHead && (
-                  <g transform={`translate(${node.x + 18 + node.branches.length * 64}, ${node.y + 8})`}>
+                  <g
+                    transform={`translate(${
+                      node.x + 18 + node.branches.length * 64 + node.tags.length * 56
+                    }, ${node.y + 8})`}
+                  >
                     <rect
                       x="0"
                       y="-10"

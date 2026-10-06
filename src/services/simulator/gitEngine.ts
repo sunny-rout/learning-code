@@ -6,6 +6,8 @@ import {
   GitStashEntry,
   GitMergeConflictState,
   PreMergeSnapshot,
+  GitTagRef,
+  GitReflogEntry,
 } from '@/types/simulator';
 import { parseCommandLine } from './commandParser';
 import { getRemoteFixture, getOrCreateRemoteFixture } from './remoteFixtures';
@@ -21,6 +23,83 @@ import {
 } from './gitHelpers';
 
 const SIMULATOR_AUTHOR = 'Student <student@example.com>';
+
+/**
+ * Evaluates whether a given file path is ignored by .gitignore rules.
+ * Implements ordered evaluation where the last matching rule wins.
+ * Supports exact paths, wildcards (*), directory prefixes, comments (#), and negation (!).
+ */
+export function isIgnored(path: string, gitignoreContent: string | undefined): boolean {
+  if (!gitignoreContent) return false;
+  const lines = gitignoreContent.split('\n');
+  let ignored = false;
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+
+    let isNegation = false;
+    let pattern = line;
+    if (pattern.startsWith('!')) {
+      isNegation = true;
+      pattern = pattern.slice(1).trim();
+    }
+
+    let matches = false;
+    if (pattern.endsWith('/')) {
+      // Directory match: e.g. "dist/" or "logs/"
+      const dirName = pattern.slice(0, -1);
+      matches = path.startsWith(pattern) || path === dirName || path.startsWith(dirName + '/');
+    } else if (pattern.includes('*')) {
+      // Wildcard: e.g. "*.log", "temp-*.txt"
+      const regexStr = '^' + pattern.replace(/\./g, '\\.').replace(/\*/g, '.*') + '$';
+      const regex = new RegExp(regexStr);
+      const basename = path.split('/').pop() || path;
+      matches = regex.test(path) || regex.test(basename);
+    } else {
+      // Exact match or basename match
+      const basename = path.split('/').pop() || path;
+      matches = path === pattern || basename === pattern;
+    }
+
+    if (matches) {
+      ignored = !isNegation;
+    }
+  }
+
+  return ignored;
+}
+
+/**
+ * Appends a HEAD movement entry to the reflog, newest first.
+ * Reflog tracks HEAD/branch pointer movements only, capped at 50 entries.
+ * Does NOT recursively trigger further reflog recordings.
+ */
+function recordReflogEntry(
+  state: GitRepoState,
+  action: string,
+  message: string,
+  targetCommitId: string
+): GitRepoState {
+  const existingReflog = state.reflog || [];
+  const newEntry: GitReflogEntry = {
+    id: 'HEAD@{0}',
+    commitId: targetCommitId,
+    action,
+    message,
+    timestamp: Date.now(),
+  };
+
+  const updated = [newEntry, ...existingReflog].slice(0, 50).map((entry, idx) => ({
+    ...entry,
+    id: `HEAD@{${idx}}`,
+  }));
+
+  return {
+    ...state,
+    reflog: updated,
+  };
+}
 
 /**
  * Pure state reducer executing a command against a GitRepoState.
@@ -263,6 +342,8 @@ function handleHelp(state: GitRepoState): CommandResult {
       '  git status [-s]             Show the working tree and staging area status',
       '  git add <file> | .          Stage file changes for commit',
       '  git rm [--cached] <file>    Remove file from index (and working tree)',
+      '  git mv <source> <target>    Move or rename a file in working tree and index',
+      '  git clean -n | -f           Preview or remove untracked files (preserves ignored)',
       '  git restore [--staged] <f>  Discard changes in working tree or unstage files',
       '  git commit -m "<message>"   Record staged changes as a new commit snapshot',
       '  git commit -am "<message>"  Stage tracked files and commit in one step',
@@ -281,7 +362,9 @@ function handleHelp(state: GitRepoState): CommandResult {
       '  git fetch [<remote>]        Download objects and refs from remote',
       '  git pull [<remote>] [<br>]  Fetch and integrate with local branch',
       '  git clone <url>             Clone a repository into a new workspace',
-      '  git show [<object>]         Show commit details and unified diff',
+      '  git tag [-a <n> -m <msg>]   Create, list, or delete release tags',
+      '  git show [<object>]         Show commit details, tag info, and unified diff',
+      '  git reflog                  Show movement history of the HEAD pointer',
       '  touch / echo / rm / cat     In-memory file creation and manipulation',
       '  clear / help                Console screen utilities',
     ],
@@ -375,6 +458,16 @@ function handleGitCommand(
     return handleGitRm(state, flags, args, headTree);
   }
 
+  // 3c. git mv
+  if (subcommand === 'mv') {
+    return handleGitMv(state, args);
+  }
+
+  // 3d. git clean
+  if (subcommand === 'clean') {
+    return handleGitClean(state, flags, args, headTree);
+  }
+
   // 4. git restore
   if (subcommand === 'restore') {
     return handleGitRestore(state, flags, args, headTree);
@@ -450,6 +543,16 @@ function handleGitCommand(
     return handleGitShow(state, flags, args);
   }
 
+  // 19. git tag
+  if (subcommand === 'tag') {
+    return handleGitTag(state, flags, args);
+  }
+
+  // 20. git reflog
+  if (subcommand === 'reflog') {
+    return handleGitReflog(state, args);
+  }
+
   return {
     nextState: state,
     stdout: [],
@@ -469,7 +572,9 @@ function handleGitStatus(
 ): CommandResult {
   const staged = getStagedChanges(headTree, state.index);
   const unstaged = getUnstagedChanges(state.index, state.workingTree);
-  const untracked = getUntrackedFiles(state.workingTree, state.index, headTree);
+  const rawUntracked = getUntrackedFiles(state.workingTree, state.index, headTree);
+  const gitignoreContent = state.workingTree['.gitignore'];
+  const untracked = rawUntracked.filter((u) => !isIgnored(u, gitignoreContent));
 
   const activeBranchName = state.activeBranch || 'HEAD (detached)';
   const isShort = Boolean(flags['s'] || flags['short']);
@@ -573,12 +678,16 @@ function handleGitAdd(
   const target = args[0];
   const nextIndex = { ...state.index };
   const stagedFiles: string[] = [];
+  const gitignoreContent = state.workingTree['.gitignore'];
 
   if (target === '.' || target === '-A') {
-    // Stage all files in working tree
+    // Stage all unignored (or already tracked) files in working tree
     for (const [p, content] of Object.entries(state.workingTree)) {
-      nextIndex[p] = content;
-      stagedFiles.push(p);
+      const isTracked = hasPath(state.index, p) || hasPath(headTree, p);
+      if (isTracked || !isIgnored(p, gitignoreContent)) {
+        nextIndex[p] = content;
+        stagedFiles.push(p);
+      }
     }
     // Also remove any file from index if it was deleted from workingTree
     for (const p of Object.keys(state.index)) {
@@ -603,6 +712,20 @@ function handleGitAdd(
         };
       }
     } else {
+      const isTracked = hasPath(state.index, target) || hasPath(headTree, target);
+      if (!isTracked && isIgnored(target, gitignoreContent)) {
+        return {
+          nextState: state,
+          stdout: [],
+          stderr: [
+            'The following paths are ignored by one of your .gitignore files:',
+            target,
+            'hint: Use -f if you really want to add them.',
+            'fatal: no files added',
+          ],
+          exitCode: 1,
+        };
+      }
       nextIndex[target] = state.workingTree[target];
       stagedFiles.push(target);
     }
@@ -730,6 +853,140 @@ function handleGitRm(
         ? `Removed '${path}' from the Staging Area while preserving it in your Working Directory.`
         : `Removed '${path}' from both the Staging Area and the Working Directory.`,
       affectedStages: isCached ? ['staging'] : ['working', 'staging'],
+    },
+  };
+}
+
+function handleGitMv(
+  state: GitRepoState,
+  args: string[]
+): CommandResult {
+  if (args.length < 2) {
+    return {
+      nextState: state,
+      stdout: [],
+      stderr: ['fatal: destination exists, source, destination: missing arguments'],
+      exitCode: 128,
+    };
+  }
+
+  const source = args[0];
+  const destination = args[1];
+
+  if (!hasPath(state.workingTree, source)) {
+    return {
+      nextState: state,
+      stdout: [],
+      stderr: [`fatal: bad source, source=${source}, destination=${destination}`],
+      exitCode: 128,
+    };
+  }
+
+  if (hasPath(state.workingTree, destination)) {
+    return {
+      nextState: state,
+      stdout: [],
+      stderr: [`fatal: destination exists, source=${source}, destination=${destination}`],
+      exitCode: 128,
+    };
+  }
+
+  const content = state.workingTree[source];
+  const nextWorkingTree = { ...state.workingTree };
+  delete nextWorkingTree[source];
+  nextWorkingTree[destination] = content;
+
+  const nextIndex = { ...state.index };
+  delete nextIndex[source];
+  nextIndex[destination] = content;
+
+  return {
+    nextState: {
+      ...state,
+      workingTree: nextWorkingTree,
+      index: nextIndex,
+    },
+    stdout: [],
+    stderr: [],
+    exitCode: 0,
+    explanation: {
+      title: `Renamed '${source}' to '${destination}'`,
+      description: `Moved file and automatically staged rename from '${source}' to '${destination}'.`,
+      affectedStages: ['working', 'staging'],
+    },
+  };
+}
+
+function handleGitClean(
+  state: GitRepoState,
+  flags: Record<string, string | boolean>,
+  args: string[],
+  headTree: Record<string, string>
+): CommandResult {
+  const hasN = Boolean(flags['n']);
+  const hasF = Boolean(flags['f']);
+  const invalidFlags = Object.keys(flags).filter((k) => k !== 'n' && k !== 'f');
+  if (invalidFlags.length > 0 || args.some((a) => a.startsWith('-') && a !== '-n' && a !== '-f')) {
+    return {
+      nextState: state,
+      stdout: [],
+      stderr: [
+        "fatal: unrecognized or unsupported clean flag. Only 'git clean -n' and 'git clean -f' are supported.",
+      ],
+      exitCode: 1,
+    };
+  }
+
+  if (!hasN && !hasF) {
+    return {
+      nextState: state,
+      stdout: [],
+      stderr: [
+        'fatal: clean.requireForce defaults to true and neither -i, -n, nor -f given; refusing to clean',
+      ],
+      exitCode: 1,
+    };
+  }
+
+  const gitignoreContent = state.workingTree['.gitignore'];
+  const untracked = getUntrackedFiles(state.workingTree, state.index, headTree);
+  // Preserves ignored files
+  const cleanable = untracked.filter((u) => !isIgnored(u, gitignoreContent)).sort();
+
+  if (hasN) {
+    const lines = cleanable.map((f) => `Would remove ${f}`);
+    return {
+      nextState: state,
+      stdout: lines,
+      stderr: [],
+      exitCode: 0,
+      explanation: {
+        title: 'Preview Untracked File Cleanup',
+        description: 'Dry run preview of untracked files that would be removed. Ignored files are preserved.',
+        affectedStages: ['working'],
+      },
+    };
+  }
+
+  // Force clean (-f)
+  const nextWorkingTree = { ...state.workingTree };
+  cleanable.forEach((f) => {
+    delete nextWorkingTree[f];
+  });
+  const lines = cleanable.map((f) => `Removing ${f}`);
+
+  return {
+    nextState: {
+      ...state,
+      workingTree: nextWorkingTree,
+    },
+    stdout: lines,
+    stderr: [],
+    exitCode: 0,
+    explanation: {
+      title: 'Removed Untracked Files',
+      description: 'Forcefully deleted uncommitted and untracked files. Preserved tracked and ignored files.',
+      affectedStages: ['working'],
     },
   };
 }
@@ -907,15 +1164,19 @@ function handleGitCommit(
   const rootTag = isRoot ? ' (root-commit)' : '';
   const wasMerging = Boolean(state.mergeState);
 
+  const commitAction = isRoot ? 'commit (initial)' : wasMerging ? 'commit (merge)' : 'commit';
+  const stateWithCommit: GitRepoState = {
+    ...state,
+    index: effectiveIndex,
+    commits: nextCommits,
+    branches: nextBranches,
+    headCommitId: commitId,
+    mergeState: null,
+  };
+  const finalState = recordReflogEntry(stateWithCommit, commitAction, message, commitId);
+
   return {
-    nextState: {
-      ...state,
-      index: effectiveIndex,
-      commits: nextCommits,
-      branches: nextBranches,
-      headCommitId: commitId,
-      mergeState: null,
-    },
+    nextState: finalState,
     stdout: [
       `[${branchLabel}${rootTag} ${commitId}] ${message}`,
       ` ${staged.length} file${staged.length > 1 ? 's' : ''} changed`,
@@ -1300,12 +1561,20 @@ function handleGitSwitch(
       },
     };
 
+    const nextState: GitRepoState = {
+      ...state,
+      branches: nextBranches,
+      activeBranch: targetBranch,
+    };
+    const finalState = recordReflogEntry(
+      nextState,
+      'checkout',
+      `moving from ${state.activeBranch || 'HEAD'} to ${targetBranch}`,
+      state.headCommitId || ''
+    );
+
     return {
-      nextState: {
-        ...state,
-        branches: nextBranches,
-        activeBranch: targetBranch,
-      },
+      nextState: finalState,
       stdout: [`Switched to a new branch '${targetBranch}'`],
       stderr: [],
       exitCode: 0,
@@ -1317,21 +1586,50 @@ function handleGitSwitch(
     };
   }
 
-  // Normal switch
-  if (!state.branches[targetBranch]) {
-    return {
-      nextState: state,
-      stdout: [],
-      stderr: [
-        isCheckout
-          ? `error: pathspec '${targetBranch}' did not match any file(s) known to git`
-          : `fatal: invalid reference: ${targetBranch}`,
-      ],
-      exitCode: 1,
-    };
+  // Normal switch or detached HEAD checkout
+  let detachedCommitId: string | null = null;
+  const isBranchTarget = Boolean(state.branches[targetBranch]);
+
+  if (!isBranchTarget) {
+    if (isCheckout) {
+      if (targetBranch.match(/^HEAD@\{(\d+)\}$/)) {
+        const match = targetBranch.match(/^HEAD@\{(\d+)\}$/);
+        const idx = parseInt(match![1], 10);
+        const entry = state.reflog?.[idx];
+        if (!entry) {
+          return {
+            nextState: state,
+            stdout: [],
+            stderr: [`fatal: Log for 'HEAD' only has ${state.reflog?.length || 0} entries.`],
+            exitCode: 128,
+          };
+        }
+        detachedCommitId = entry.commitId;
+      } else {
+        const commitMatch = Object.keys(state.commits).find(
+          (id) => id === targetBranch || id.startsWith(targetBranch)
+        );
+        if (commitMatch) {
+          detachedCommitId = commitMatch;
+        }
+      }
+    }
+
+    if (!detachedCommitId) {
+      return {
+        nextState: state,
+        stdout: [],
+        stderr: [
+          isCheckout
+            ? `error: pathspec '${targetBranch}' did not match any file(s) known to git`
+            : `fatal: invalid reference: ${targetBranch}`,
+        ],
+        exitCode: 1,
+      };
+    }
   }
 
-  if (targetBranch === state.activeBranch) {
+  if (isBranchTarget && targetBranch === state.activeBranch) {
     return {
       nextState: state,
       stdout: [`Already on '${targetBranch}'`],
@@ -1340,7 +1638,7 @@ function handleGitSwitch(
     };
   }
 
-  const targetCommitId = state.branches[targetBranch].commitId;
+  const targetCommitId = isBranchTarget ? state.branches[targetBranch].commitId : detachedCommitId;
   const targetCommit = targetCommitId ? state.commits[targetCommitId] : null;
   const targetTree = targetCommit ? targetCommit.tree : {};
 
@@ -1387,20 +1685,39 @@ function handleGitSwitch(
     nextWorkingTree[u] = state.workingTree[u];
   }
 
+  const nextActiveBranch = isBranchTarget ? targetBranch : null;
+  const nextState: GitRepoState = {
+    ...state,
+    activeBranch: nextActiveBranch,
+    headCommitId: targetCommitId || null,
+    index: { ...targetTree },
+    workingTree: nextWorkingTree,
+  };
+
+  const fromRef = state.activeBranch || state.headCommitId?.slice(0, 7) || 'HEAD';
+  const toRef = nextActiveBranch || targetCommitId?.slice(0, 7) || 'HEAD';
+  const finalState = recordReflogEntry(nextState, 'checkout', `moving from ${fromRef} to ${toRef}`, targetCommitId || '');
+
+  const stdout = isBranchTarget
+    ? [`Switched to branch '${targetBranch}'`]
+    : [
+        `Note: switching to '${targetBranch}'.`,
+        `You are in 'detached HEAD' state. You can look around, make experimental`,
+        `changes and commit them, and you can discard any commits you make in this`,
+        `state without impacting any branches by switching back to a branch.`,
+        `HEAD is now at ${targetCommitId?.slice(0, 7)} ${targetCommit?.message || ''}`,
+      ];
+
   return {
-    nextState: {
-      ...state,
-      activeBranch: targetBranch,
-      headCommitId: targetCommitId || null,
-      index: { ...targetTree },
-      workingTree: nextWorkingTree,
-    },
-    stdout: [`Switched to branch '${targetBranch}'`],
+    nextState: finalState,
+    stdout,
     stderr: [],
     exitCode: 0,
     explanation: {
-      title: `Switched Branch to '${targetBranch}'`,
-      description: `Moved HEAD to branch '${targetBranch}'. Working directory and staging area updated to match snapshot.`,
+      title: isBranchTarget ? `Switched Branch to '${targetBranch}'` : `Checked Out Commit in Detached HEAD`,
+      description: isBranchTarget
+        ? `Moved HEAD to branch '${targetBranch}'. Working directory and staging area updated to match snapshot.`
+        : `Detached HEAD at commit ${targetCommitId?.slice(0, 7)}. Working directory updated.`,
       affectedStages: ['working', 'staging', 'local'],
     },
   };
@@ -1546,14 +1863,22 @@ function handleGitMerge(
       },
     };
 
+    const nextState: GitRepoState = {
+      ...state,
+      branches: nextBranches,
+      headCommitId: targetCommitId,
+      index: { ...targetCommit.tree },
+      workingTree: { ...targetCommit.tree },
+    };
+    const finalState = recordReflogEntry(
+      nextState,
+      `merge ${targetBranch}`,
+      'Fast-forward',
+      targetCommitId
+    );
+
     return {
-      nextState: {
-        ...state,
-        branches: nextBranches,
-        headCommitId: targetCommitId,
-        index: { ...targetCommit.tree },
-        workingTree: { ...targetCommit.tree },
-      },
+      nextState: finalState,
       stdout: [
         `Updating ${currentCommitId.slice(0, 7)}..${targetCommitId.slice(0, 7)}`,
         'Fast-forward',
@@ -1976,6 +2301,19 @@ function handleGitReset(
 
   if (targetSpec === 'HEAD') {
     targetCommitId = state.headCommitId;
+  } else if (targetSpec.match(/^HEAD@\{(\d+)\}$/)) {
+    const match = targetSpec.match(/^HEAD@\{(\d+)\}$/);
+    const idx = parseInt(match![1], 10);
+    const entry = state.reflog?.[idx];
+    if (!entry) {
+      return {
+        nextState: state,
+        stdout: [],
+        stderr: [`fatal: Log for 'HEAD' only has ${state.reflog?.length || 0} entries.`],
+        exitCode: 128,
+      };
+    }
+    targetCommitId = entry.commitId;
   } else if (targetSpec.startsWith('HEAD~') || targetSpec.startsWith('HEAD^')) {
     let count = 1;
     if (targetSpec.startsWith('HEAD~')) {
@@ -2066,14 +2404,17 @@ function handleGitReset(
       };
     }
 
+    const nextState: GitRepoState = {
+      ...state,
+      branches: nextBranches,
+      headCommitId: targetCommitId,
+      index: { ...targetTree },
+      workingTree: nextWorkingTree,
+    };
+    const finalState = recordReflogEntry(nextState, 'reset', `moving to ${targetSpec}`, targetCommitId || '');
+
     return {
-      nextState: {
-        ...state,
-        branches: nextBranches,
-        headCommitId: targetCommitId,
-        index: { ...targetTree },
-        workingTree: nextWorkingTree,
-      },
+      nextState: finalState,
       stdout: [`HEAD is now at ${targetCommitId?.slice(0, 7) || '0000000'} ${targetCommit?.message || ''}`],
       stderr: [],
       exitCode: 0,
@@ -2094,12 +2435,15 @@ function handleGitReset(
         commitId: targetCommitId || '',
       };
     }
+    const nextState: GitRepoState = {
+      ...state,
+      branches: nextBranches,
+      headCommitId: targetCommitId,
+    };
+    const finalState = recordReflogEntry(nextState, 'reset', `moving to ${targetSpec}`, targetCommitId || '');
+
     return {
-      nextState: {
-        ...state,
-        branches: nextBranches,
-        headCommitId: targetCommitId,
-      },
+      nextState: finalState,
       stdout: [],
       stderr: [],
       exitCode: 0,
@@ -2119,13 +2463,16 @@ function handleGitReset(
       commitId: targetCommitId || '',
     };
   }
+  const nextState: GitRepoState = {
+    ...state,
+    branches: nextBranches,
+    headCommitId: targetCommitId,
+    index: { ...targetTree },
+  };
+  const finalState = recordReflogEntry(nextState, 'reset', `moving to ${targetSpec}`, targetCommitId || '');
+
   return {
-    nextState: {
-      ...state,
-      branches: nextBranches,
-      headCommitId: targetCommitId,
-      index: { ...targetTree },
-    },
+    nextState: finalState,
     stdout: [
       `Unstaged changes after reset:`,
       `HEAD is now at ${targetCommitId?.slice(0, 7) || '0000000'} ${targetCommit?.message || ''}`,
@@ -2353,7 +2700,143 @@ function handleGitPush(
   let remoteName = 'origin';
   let branchName = state.activeBranch || 'main';
 
-  // Support: git push, git push origin main, git push -u origin main
+  // Support: git push, git push origin main, git push -u origin main, git push origin <tag>, git push origin --tags
+  const isPushAllTags = Boolean(flags['tags']) || args.includes('--tags');
+  if (args.length >= 2) {
+    remoteName = args[0];
+    branchName = args[1];
+  } else if (args.length === 1 && !isPushAllTags) {
+    remoteName = args[0];
+  }
+
+  // Tag push handling
+  const isSpecificTag = Boolean(
+    args.length >= 2 && state.tags && state.tags[args[1]] && !state.branches[args[1]]
+  );
+
+  if (isPushAllTags || isSpecificTag) {
+    const remote = state.remotes[remoteName];
+    if (!remote) {
+      return {
+        nextState: state,
+        stdout: [],
+        stderr: [
+          `fatal: '${remoteName}' does not appear to be a git repository`,
+          'fatal: Could not read from remote repository.',
+        ],
+        exitCode: 128,
+      };
+    }
+
+    const tagsToPush = isPushAllTags
+      ? Object.values(state.tags || {})
+      : [state.tags[args[1]]];
+
+    if (tagsToPush.length === 0) {
+      return {
+        nextState: state,
+        stdout: ['Everything up-to-date'],
+        stderr: [],
+        exitCode: 0,
+      };
+    }
+
+    // Remote tag collision guard (Blocker 4):
+    // Idempotent on identical SHA, rejected on different SHA, never silently overwrite!
+    for (const tag of tagsToPush) {
+      const existingRemoteSha = remote.tags?.[tag.name];
+      if (existingRemoteSha && existingRemoteSha !== tag.commitId) {
+        return {
+          nextState: state,
+          stdout: [
+            `To ${remote.url}`,
+            ` ! [rejected]        ${tag.name} -> ${tag.name} (already exists)`,
+          ],
+          stderr: [
+            `error: failed to push some refs to '${remote.url}'`,
+            `hint: Updates were rejected because the tag already exists in the remote.`,
+          ],
+          exitCode: 1,
+        };
+      }
+    }
+
+    // Object graph synchronization: sync reachable commits from pushed tags
+    const reachableCommits: Record<string, GitCommitNode> = { ...remote.commits };
+    const queue: string[] = tagsToPush.map((t) => t.commitId);
+    const visited = new Set<string>();
+
+    while (queue.length > 0) {
+      const cId = queue.shift()!;
+      if (visited.has(cId)) continue;
+      visited.add(cId);
+
+      const commit = state.commits[cId];
+      if (commit) {
+        reachableCommits[cId] = commit;
+        for (const pId of commit.parentIds) {
+          if (!visited.has(pId)) queue.push(pId);
+        }
+      }
+    }
+
+    const nextRemoteTags: Record<string, string> = { ...(remote.tags || {}) };
+    const pushedTagLines: string[] = [];
+    let hasNew = false;
+
+    for (const tag of tagsToPush) {
+      if (!nextRemoteTags[tag.name]) {
+        nextRemoteTags[tag.name] = tag.commitId;
+        pushedTagLines.push(` * [new tag]         ${tag.name} -> ${tag.name}`);
+        hasNew = true;
+      }
+    }
+
+    // Update in-memory remote fixture as well
+    const fixture = getOrCreateRemoteFixture(remote.url);
+    for (const [cId, commit] of Object.entries(reachableCommits)) {
+      fixture.commits[cId] = commit;
+    }
+    if (!fixture.tags) fixture.tags = {};
+    for (const [tName, cId] of Object.entries(nextRemoteTags)) {
+      fixture.tags[tName] = cId;
+    }
+
+    const nextRemotes: Record<string, GitRemoteRef> = {
+      ...state.remotes,
+      [remoteName]: {
+        ...remote,
+        commits: reachableCommits,
+        tags: nextRemoteTags,
+      },
+    };
+
+    if (!hasNew) {
+      return {
+        nextState: { ...state, remotes: nextRemotes },
+        stdout: ['Everything up-to-date'],
+        stderr: [],
+        exitCode: 0,
+      };
+    }
+
+    return {
+      nextState: {
+        ...state,
+        remotes: nextRemotes,
+      },
+      stdout: [`To ${remote.url}`, ...pushedTagLines],
+      stderr: [],
+      exitCode: 0,
+      explanation: {
+        title: `Pushed Tags to '${remoteName}'`,
+        description: `Synchronized release tags and their reachable commits with ${remote.url}.`,
+        affectedStages: ['remote'],
+      },
+    };
+  }
+
+  // Branch push handling
   if (args.length >= 2) {
     remoteName = args[0];
     branchName = args[1];
@@ -2661,14 +3144,22 @@ function handleGitPull(
       };
     }
 
+    const nextState: GitRepoState = {
+      ...fetchedState,
+      branches: nextBranches,
+      headCommitId: remoteCommitId,
+      index: { ...targetCommit.tree },
+      workingTree: { ...targetCommit.tree },
+    };
+    const finalState = recordReflogEntry(
+      nextState,
+      'pull',
+      'Fast-forward',
+      remoteCommitId
+    );
+
     return {
-      nextState: {
-        ...fetchedState,
-        branches: nextBranches,
-        headCommitId: remoteCommitId,
-        index: { ...targetCommit.tree },
-        workingTree: { ...targetCommit.tree },
-      },
+      nextState: finalState,
       stdout: [
         ...fetchResult.stdout,
         `Updating ${localCommitId ? localCommitId.slice(0, 7) : '0000000'}..${remoteCommitId.slice(0, 7)}`,
@@ -2802,15 +3293,23 @@ function handleGitPull(
     };
   }
 
+  const nextState: GitRepoState = {
+    ...fetchedState,
+    commits: { ...fetchedState.commits, [mergeCommitId]: mergeCommit },
+    branches: nextBranches,
+    headCommitId: mergeCommitId,
+    index: mergedIndex,
+    workingTree: mergedWorkingTree,
+  };
+  const finalState = recordReflogEntry(
+    nextState,
+    'pull',
+    "Merge made by the 'ort' strategy",
+    mergeCommitId
+  );
+
   return {
-    nextState: {
-      ...fetchedState,
-      commits: { ...fetchedState.commits, [mergeCommitId]: mergeCommit },
-      branches: nextBranches,
-      headCommitId: mergeCommitId,
-      index: mergedIndex,
-      workingTree: mergedWorkingTree,
-    },
+    nextState: finalState,
     stdout: [
       ...fetchResult.stdout,
       `Merge made by the 'ort' strategy.`,
@@ -2898,6 +3397,16 @@ function handleGitClone(
     workingTree: { ...defaultTree },
     stash: [],
     mergeState: null,
+    tags: {},
+    reflog: [
+      {
+        id: 'HEAD@{0}',
+        commitId: defaultCommitId,
+        action: 'clone',
+        message: `from ${url}`,
+        timestamp: Date.now(),
+      },
+    ],
   };
 
   const commitCount = Object.keys(fixture.commits).length;
@@ -2928,8 +3437,12 @@ function handleGitShow(
 ): CommandResult {
   const targetSpec = args[0] || 'HEAD';
   let targetCommitId: string | null = null;
+  let tagRef: GitTagRef | null = null;
 
-  if (targetSpec === 'HEAD') {
+  if (state.tags && state.tags[targetSpec]) {
+    tagRef = state.tags[targetSpec];
+    targetCommitId = tagRef.commitId;
+  } else if (targetSpec === 'HEAD') {
     targetCommitId = state.headCommitId;
   } else if (state.branches[targetSpec]) {
     targetCommitId = state.branches[targetSpec].commitId;
@@ -2968,9 +3481,18 @@ function handleGitShow(
 
   const commit = state.commits[targetCommitId];
   const dateStr = new Date(commit.timestamp).toUTCString();
-  const lines: string[] = [
-    `commit ${commit.id}`,
-  ];
+  const lines: string[] = [];
+
+  if (tagRef && tagRef.type === 'annotated') {
+    lines.push(`tag ${tagRef.name}`);
+    lines.push(`Tagger: ${tagRef.tagger || SIMULATOR_AUTHOR}`);
+    lines.push(`Date:   ${new Date(tagRef.timestamp || commit.timestamp).toUTCString()}`);
+    lines.push('');
+    lines.push(`    ${tagRef.message || ''}`);
+    lines.push('');
+  }
+
+  lines.push(`commit ${commit.id}`);
   if (commit.parentIds.length > 1) {
     lines.push(`Merge: ${commit.parentIds.map((p) => p.slice(0, 7)).join(' ')}`);
   }
@@ -3050,5 +3572,188 @@ function handleGitShow(
     stdout: lines,
     stderr: [],
     exitCode: 0,
+  };
+}
+
+function handleGitTag(
+  state: GitRepoState,
+  flags: Record<string, string | boolean>,
+  args: string[]
+): CommandResult {
+  const isDelete = Boolean(flags['d']);
+  const isAnnotated = Boolean(flags['a']);
+  const userMessage = typeof flags['m'] === 'string' ? flags['m'] : null;
+
+  // 1. git tag (list tags in alphabetical order)
+  if (!isDelete && !isAnnotated && args.length === 0) {
+    const tagNames = Object.keys(state.tags || {}).sort();
+    return {
+      nextState: state,
+      stdout: tagNames,
+      stderr: [],
+      exitCode: 0,
+    };
+  }
+
+  // 2. git tag -d <name>
+  if (isDelete) {
+    const tagName = typeof flags['d'] === 'string' ? flags['d'] : args[0];
+    if (!tagName) {
+      return {
+        nextState: state,
+        stdout: [],
+        stderr: ['fatal: tag name required for deletion'],
+        exitCode: 1,
+      };
+    }
+    if (!state.tags || !state.tags[tagName]) {
+      return {
+        nextState: state,
+        stdout: [],
+        stderr: [`error: tag '${tagName}' not found.`],
+        exitCode: 1,
+      };
+    }
+    const targetCommit = state.tags[tagName].commitId;
+    const nextTags = { ...state.tags };
+    delete nextTags[tagName];
+
+    return {
+      nextState: {
+        ...state,
+        tags: nextTags,
+      },
+      stdout: [`Deleted tag '${tagName}' (was ${targetCommit.slice(0, 7)})`],
+      stderr: [],
+      exitCode: 0,
+      explanation: {
+        title: `Deleted Tag '${tagName}'`,
+        description: `Removed local tag ref '${tagName}'.`,
+        affectedStages: ['local'],
+      },
+    };
+  }
+
+  // 3. Create tag
+  const tagName = isAnnotated && typeof flags['a'] === 'string' ? flags['a'] : args[0];
+  if (!tagName) {
+    return {
+      nextState: state,
+      stdout: [],
+      stderr: ['fatal: tag name required'],
+      exitCode: 1,
+    };
+  }
+
+  if (!state.headCommitId) {
+    return {
+      nextState: state,
+      stdout: [],
+      stderr: ["fatal: Failed to resolve 'HEAD' as a valid ref."],
+      exitCode: 128,
+    };
+  }
+
+  if (state.tags && state.tags[tagName]) {
+    return {
+      nextState: state,
+      stdout: [],
+      stderr: [`fatal: tag '${tagName}' already exists`],
+      exitCode: 128,
+    };
+  }
+
+  if (isAnnotated) {
+    if (!userMessage) {
+      return {
+        nextState: state,
+        stdout: [],
+        stderr: ['fatal: -a requires -m option in this educational sandbox.'],
+        exitCode: 1,
+      };
+    }
+
+    const newTag: GitTagRef = {
+      name: tagName,
+      commitId: state.headCommitId,
+      type: 'annotated',
+      message: userMessage,
+      tagger: SIMULATOR_AUTHOR,
+      timestamp: Date.now(),
+    };
+
+    return {
+      nextState: {
+        ...state,
+        tags: {
+          ...state.tags,
+          [tagName]: newTag,
+        },
+      },
+      stdout: [],
+      stderr: [],
+      exitCode: 0,
+      explanation: {
+        title: `Created Annotated Tag '${tagName}'`,
+        description: `Created annotated release tag '${tagName}' pointing to commit ${state.headCommitId.slice(0, 7)} with message "${userMessage}".`,
+        affectedStages: ['local'],
+      },
+    };
+  }
+
+  // Lightweight tag
+  const newTag: GitTagRef = {
+    name: tagName,
+    commitId: state.headCommitId,
+    type: 'lightweight',
+  };
+
+  return {
+    nextState: {
+      ...state,
+      tags: {
+        ...state.tags,
+        [tagName]: newTag,
+      },
+    },
+    stdout: [],
+    stderr: [],
+    exitCode: 0,
+    explanation: {
+      title: `Created Lightweight Tag '${tagName}'`,
+      description: `Created lightweight tag '${tagName}' pointing to commit ${state.headCommitId.slice(0, 7)}.`,
+      affectedStages: ['local'],
+    },
+  };
+}
+
+function handleGitReflog(
+  state: GitRepoState,
+  _args: string[]
+): CommandResult {
+  const entries = state.reflog || [];
+  if (entries.length === 0) {
+    return {
+      nextState: state,
+      stdout: [],
+      stderr: [],
+      exitCode: 0,
+    };
+  }
+
+  const lines = entries.map(
+    (e) => `${e.commitId.slice(0, 7)} ${e.id}: ${e.action}: ${e.message}`
+  );
+
+  return {
+    nextState: state,
+    stdout: lines,
+    stderr: [],
+    exitCode: 0,
+    explanation: {
+      title: 'Reflog Inspection',
+      description: 'Listed sequential history of all HEAD pointer movements.',
+      affectedStages: ['local'],
+    },
   };
 }

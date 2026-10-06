@@ -18,6 +18,8 @@ export function createPristineRepoState(): GitRepoState {
     remotes: {},
     stash: [],
     mergeState: null,
+    tags: {},
+    reflog: [],
   };
 }
 
@@ -42,6 +44,8 @@ export function createPracticeExerciseState(exerciseId: number): GitRepoState {
         remotes: {},
         stash: [],
         mergeState: null,
+        tags: {},
+        reflog: [],
       };
 
     case 2:
@@ -61,6 +65,8 @@ export function createPracticeExerciseState(exerciseId: number): GitRepoState {
         remotes: {},
         stash: [],
         mergeState: null,
+        tags: {},
+        reflog: [],
       };
 
     case 3: {
@@ -89,6 +95,16 @@ export function createPracticeExerciseState(exerciseId: number): GitRepoState {
         remotes: {},
         stash: [],
         mergeState: null,
+        tags: {},
+        reflog: [
+          {
+            id: 'HEAD@{0}',
+            commitId: c1Id,
+            action: 'commit (initial)',
+            message: 'Initial commit',
+            timestamp,
+          },
+        ],
       };
     }
 
@@ -149,6 +165,23 @@ export function createPracticeExerciseState(exerciseId: number): GitRepoState {
         remotes: {},
         stash: [],
         mergeState: null,
+        tags: {},
+        reflog: [
+          {
+            id: 'HEAD@{0}',
+            commitId: c3Id,
+            action: 'commit',
+            message: 'Add docs page',
+            timestamp: timestamp + 2000,
+          },
+          {
+            id: 'HEAD@{1}',
+            commitId: c1Id,
+            action: 'commit (initial)',
+            message: 'Initial commit',
+            timestamp,
+          },
+        ],
       };
     }
 
@@ -178,6 +211,16 @@ export function createPracticeExerciseState(exerciseId: number): GitRepoState {
         remotes: {},
         stash: [],
         mergeState: null,
+        tags: {},
+        reflog: [
+          {
+            id: 'HEAD@{0}',
+            commitId: c1Id,
+            action: 'commit (initial)',
+            message: 'Initial commit',
+            timestamp,
+          },
+        ],
       };
     }
 
@@ -217,6 +260,66 @@ export function createPracticeExerciseState(exerciseId: number): GitRepoState {
         remotes: {},
         stash: [],
         mergeState: null,
+        tags: {},
+        reflog: [
+          {
+            id: 'HEAD@{0}',
+            commitId: c1Id,
+            action: 'commit (initial)',
+            message: 'Initial stable commit',
+            timestamp,
+          },
+        ],
+      };
+    }
+
+    case 7: {
+      // Exercise 7: Complete Production Workflow & Tagging
+      // Pre-seeded with 1 initial commit on main, origin remote registered and pushed with upstream tracking
+      const c1Tree = { 'README.md': '# Production App\nStable production codebase.\n' };
+      const c1Id = createDeterministicCommitId([], 'Initial production commit', c1Tree, author, timestamp);
+      const c1: GitCommitNode = {
+        id: c1Id,
+        parentIds: [],
+        message: 'Initial production commit',
+        author,
+        timestamp,
+        tree: c1Tree,
+      };
+
+      const remoteUrl = 'https://github.com/student/git-practice.git';
+
+      return {
+        isInitialized: true,
+        workingTree: { ...c1Tree },
+        index: { ...c1Tree },
+        commits: { [c1Id]: c1 },
+        branches: {
+          main: { name: 'main', commitId: c1Id, upstream: 'origin/main' },
+        },
+        activeBranch: 'main',
+        headCommitId: c1Id,
+        remotes: {
+          origin: {
+            name: 'origin',
+            url: remoteUrl,
+            commits: { [c1Id]: c1 },
+            branches: { main: c1Id },
+            tags: {},
+          },
+        },
+        stash: [],
+        mergeState: null,
+        tags: {},
+        reflog: [
+          {
+            id: 'HEAD@{0}',
+            commitId: c1Id,
+            action: 'commit (initial)',
+            message: 'Initial production commit',
+            timestamp,
+          },
+        ],
       };
     }
 
